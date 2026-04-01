@@ -14,12 +14,13 @@ import (
 )
 
 // New creates and configures a chi.Mux with all application routes and middleware.
-func New(apiHandler *handler.APIHandler, dashHandler *handler.DashboardHandler, cfg *config.Config) *chi.Mux {
+func New(apiHandler *handler.APIHandler, dashHandler *handler.DashboardHandler, loginHandler *handler.LoginHandler, cfg *config.Config) *chi.Mux {
 	r := chi.NewRouter()
 
 	// Global middleware (applied to all routes including static files).
 	r.Use(middleware.RequestID())
 	r.Use(middleware.Logger())
+	r.Use(middleware.SecurityHeaders())
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.RealIP)
 	r.Use(chimiddleware.Timeout(30 * time.Second))
@@ -28,10 +29,11 @@ func New(apiHandler *handler.APIHandler, dashHandler *handler.DashboardHandler, 
 	staticFS := http.FileServerFS(web.StaticFS)
 	r.Handle("/static/*", staticFS)
 	r.Get("/api/v1/health", apiHandler.HealthCheck)
+	r.Get("/login", loginHandler.Login)
 
 	// All remaining routes require authentication.
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.Auth(cfg.APITokens, cfg.RequireAuthReads))
+		r.Use(middleware.Auth(cfg.APITokens, cfg.RequireAuthReads, cfg.SessionSecret))
 
 		// API routes (append-only: create and read only, no update/delete).
 		r.Get("/api/v1/events", apiHandler.ListEvents)

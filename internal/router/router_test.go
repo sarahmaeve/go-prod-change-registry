@@ -110,13 +110,15 @@ func newTestRouter(t *testing.T, requireAuthReads bool) (http.Handler, *mockStor
 	svc := service.NewChangeService(ms)
 	apiH := handler.NewAPIHandler(svc, &mockPinger{})
 	dashH := handler.NewDashboardHandler(svc, 0)
+	loginH := handler.NewLoginHandler([]string{testToken}, []byte("test-session-secret"))
 
 	cfg := &config.Config{
 		APITokens:        []string{testToken},
 		RequireAuthReads: requireAuthReads,
+		SessionSecret:    []byte("test-session-secret"),
 	}
 
-	r := router.New(apiH, dashH, cfg)
+	r := router.New(apiH, dashH, loginH, cfg)
 	return r, ms
 }
 

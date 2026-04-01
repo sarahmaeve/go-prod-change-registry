@@ -18,11 +18,11 @@ type authErrorDetail struct {
 	Message string `json:"message"`
 }
 
-// Auth returns middleware that validates Bearer tokens from the Authorization header.
-// The tokens slice contains the list of valid tokens. If requireForReads is false,
-// GET and HEAD requests are allowed without authentication. The /api/v1/health
-// endpoint is always exempt from authentication.
-func Auth(tokens []string, requireForReads bool) func(http.Handler) http.Handler {
+// Auth returns middleware that validates Bearer tokens from the Authorization header,
+// session cookies, or query parameter tokens. The tokens slice contains the list of
+// valid tokens. If requireForReads is false, GET and HEAD requests are allowed without
+// authentication. The sessionSecret is used to validate session cookies.
+func Auth(tokens []string, requireForReads bool, sessionSecret []byte) func(http.Handler) http.Handler {
 	// Store tokens as byte slices for constant-time comparison.
 	validTokens := make([][]byte, len(tokens))
 	for i, t := range tokens {
@@ -37,25 +37,45 @@ func Auth(tokens []string, requireForReads bool) func(http.Handler) http.Handler
 				return
 			}
 
-			token := extractToken(r)
-			if token == "" {
-				writeAuthError(w, "missing or malformed Authorization header")
+			// Check Bearer token.
+			token := extractBearerToken(r)
+			if token != "" && ValidateToken([]byte(token), validTokens) {
+				next.ServeHTTP(w, r)
 				return
 			}
 
-			if !validateToken([]byte(token), validTokens) {
-				writeAuthError(w, "invalid token")
+			// Check session cookie.
+			if len(sessionSecret) > 0 && ValidateSessionCookie(r, sessionSecret) {
+				next.ServeHTTP(w, r)
 				return
 			}
 
+			// Check query param token (backwards compat).
+			token = r.URL.Query().Get("token")
+			if token != "" && ValidateToken([]byte(token), validTokens) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			writeAuthError(w, "missing or malformed Authorization header")
+		})
+	}
+}
+
+// SecurityHeaders returns middleware that sets common security headers on all responses.
+func SecurityHeaders() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Referrer-Policy", "no-referrer")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
 			next.ServeHTTP(w, r)
 		})
 	}
 }
 
-// validateToken checks the provided token against the valid tokens list
+// ValidateToken checks the provided token against the valid tokens list
 // using constant-time comparison to prevent timing side-channel attacks.
-func validateToken(provided []byte, validTokens [][]byte) bool {
+func ValidateToken(provided []byte, validTokens [][]byte) bool {
 	for _, valid := range validTokens {
 		if subtle.ConstantTimeCompare(provided, valid) == 1 {
 			return true
@@ -64,20 +84,17 @@ func validateToken(provided []byte, validTokens [][]byte) bool {
 	return false
 }
 
-// extractToken pulls the token from an "Authorization: Bearer <token>" header,
-// falling back to a "token" query parameter for browser-based access (e.g., the dashboard).
-func extractToken(r *http.Request) string {
+// extractBearerToken pulls the token from an "Authorization: Bearer <token>" header.
+func extractBearerToken(r *http.Request) string {
 	auth := r.Header.Get("Authorization")
-	if auth != "" {
-		const prefix = "Bearer "
-		if strings.HasPrefix(auth, prefix) {
-			return strings.TrimPrefix(auth, prefix)
-		}
+	if auth == "" {
 		return ""
 	}
-
-	// Fall back to query parameter for browser access.
-	return r.URL.Query().Get("token")
+	const prefix = "Bearer "
+	if strings.HasPrefix(auth, prefix) {
+		return strings.TrimPrefix(auth, prefix)
+	}
+	return ""
 }
 
 // writeAuthError sends a 401 JSON error response.

@@ -129,7 +129,7 @@ func TestAuth(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			mw := middleware.Auth([]string{validToken}, tc.requireForReads)
+			mw := middleware.Auth([]string{validToken}, tc.requireForReads, nil)
 			srv := mw(okHandler)
 
 			path := tc.path
@@ -152,7 +152,7 @@ func TestAuth(t *testing.T) {
 	t.Run("401 response body is JSON with error code and message", func(t *testing.T) {
 		t.Parallel()
 
-		mw := middleware.Auth([]string{validToken}, true)
+		mw := middleware.Auth([]string{validToken}, true, nil)
 		srv := mw(okHandler)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/changes", nil)

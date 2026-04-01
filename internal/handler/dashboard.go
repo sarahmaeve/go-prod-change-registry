@@ -42,12 +42,9 @@ func NewDashboardHandler(svc *service.ChangeService, refreshSec int) *DashboardH
 			sort.Strings(out)
 			return out
 		},
-		"tagFilterURL": func(key, value, token string) string {
+		"tagFilterURL": func(key, value string) string {
 			q := url.Values{}
 			q.Set("tag", key+":"+value)
-			if token != "" {
-				q.Set("token", token)
-			}
 			return "/?" + q.Encode()
 		},
 	}
@@ -109,7 +106,6 @@ type dashboardData struct {
 	NextURL     string
 	OffsetStart int
 	OffsetEnd   int
-	Token       string
 }
 
 // detailData is the template data for the detail page.
@@ -117,7 +113,6 @@ type detailData struct {
 	RefreshSec  int
 	Event       *model.ChangeEvent
 	Annotations *model.EventAnnotations
-	Token       string
 }
 
 // quickRanges maps the quick-select range values to durations.
@@ -244,8 +239,6 @@ func (h *DashboardHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	offsetEnd := offset + len(result.Events)
 
-	token := r.URL.Query().Get("token")
-
 	data := dashboardData{
 		RefreshSec:  h.refreshSec,
 		Events:      dashEvents,
@@ -259,7 +252,6 @@ func (h *DashboardHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		NextURL:     h.paginationURL(r, offset+limit, limit),
 		OffsetStart: offsetStart,
 		OffsetEnd:   offsetEnd,
-		Token:       token,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -292,7 +284,6 @@ func (h *DashboardHandler) Detail(w http.ResponseWriter, r *http.Request) {
 		RefreshSec:  0,
 		Event:       event,
 		Annotations: annotations,
-		Token:       r.URL.Query().Get("token"),
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -318,9 +309,6 @@ func (h *DashboardHandler) ToggleStar(w http.ResponseWriter, r *http.Request) {
 	referer := r.Header.Get("Referer")
 	if referer == "" {
 		referer = "/"
-		if token := r.URL.Query().Get("token"); token != "" {
-			referer = "/?token=" + token
-		}
 	}
 	http.Redirect(w, r, referer, http.StatusSeeOther)
 }

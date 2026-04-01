@@ -10,7 +10,7 @@ export PCR_API_TOKENS="my-secret-token"
 ./bin/pcr-server
 ```
 
-The server starts on `:8080` by default. Open `http://localhost:8080/?token=my-secret-token` for the dashboard.
+The server starts on `:8080` by default. Log in at `http://localhost:8080/login?token=my-secret-token` to access the dashboard.
 
 ## Configuration
 
@@ -29,6 +29,7 @@ All configuration is via environment variables prefixed with `PCR_`.
 | `PCR_SHUTDOWN_TIMEOUT` | No | `15s` | Graceful shutdown timeout (Go duration) |
 | `PCR_DB_BUSY_TIMEOUT` | No | `5s` | SQLite busy/write-lock wait timeout |
 | `PCR_DB_SLOW_QUERY_THRESHOLD` | No | `100ms` | Log a warning when a query exceeds this |
+| `PCR_SESSION_SECRET` | No | (random) | HMAC key for dashboard session cookies. Set to a stable value so sessions survive restarts |
 
 ## API Reference
 
@@ -258,7 +259,7 @@ Both requests return the same event (same `id`, same `created_at`). The second r
 
 ## Dashboard
 
-The built-in HTML dashboard is served at `/` and requires authentication via the `?token=` query parameter (e.g., `/?token=my-secret-token`). It provides:
+The built-in HTML dashboard is served at `/`. Authenticate by visiting `/login?token=my-secret-token` — this sets a session cookie and redirects to the dashboard. The cookie is valid for 24 hours. It provides:
 
 - Time range buttons to filter events by predefined windows (last hour, 6h, 24h, 7d, etc.)
 - Clickable tags that filter the event list to matching events
@@ -329,9 +330,25 @@ go test -race -tags=integration ./...
 
 The server follows a zero-trust-by-default model. Every request (reads and writes) must be authenticated unless `PCR_REQUIRE_AUTH_READS` is set to `false`, in which case only write operations require a token.
 
-Authentication is performed via one of two methods:
+Authentication is performed via one of three methods (checked in this order):
 
-1. **Bearer token header:** `Authorization: Bearer <token>`
-2. **Query parameter:** `?token=<token>`
+1. **Bearer token header:** `Authorization: Bearer <token>` — used by API clients, scripts, CI/CD
+2. **Session cookie:** Set by the `/login` endpoint — used by the dashboard in browsers
+3. **Query parameter:** `?token=<token>` — backwards-compatible fallback
 
-Tokens are configured through the `PCR_API_TOKENS` environment variable (comma-separated). Static files under `/static/*` are served without authentication.
+### Dashboard login
+
+Browse to `/login?token=your-token`. The server validates the token, sets an HttpOnly session cookie (`pcr_session`, 24-hour expiry, SameSite=Lax), and redirects to `/`. All subsequent dashboard requests use the cookie — no token appears in URLs, browser history, or Referer headers.
+
+Set `PCR_SESSION_SECRET` to a stable string so sessions survive server restarts. If unset, a random secret is generated (sessions expire on restart).
+
+### Security headers
+
+All responses include `Referrer-Policy: no-referrer` and `X-Content-Type-Options: nosniff`.
+
+### Public routes
+
+Tokens are configured through the `PCR_API_TOKENS` environment variable (comma-separated). The following routes do not require authentication:
+- `/api/v1/health` — health check
+- `/static/*` — CSS and static assets
+- `/login` — session login endpoint

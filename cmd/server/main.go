@@ -69,8 +69,10 @@ func main() {
 	apiHandler := handler.NewAPIHandler(svc, db)
 	dashHandler := handler.NewDashboardHandler(svc, cfg.DashboardRefreshSec)
 
+	loginHandler := handler.NewLoginHandler(cfg.APITokens, cfg.SessionSecret)
+
 	// Create router and HTTP server.
-	r := router.New(apiHandler, dashHandler, cfg)
+	r := router.New(apiHandler, dashHandler, loginHandler, cfg)
 	srv := &http.Server{
 		Addr:         cfg.Addr,
 		Handler:      r,

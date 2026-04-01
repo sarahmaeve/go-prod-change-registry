@@ -15,10 +15,13 @@ no PUT or DELETE endpoints. Status changes (star, alert) are recorded as
 
 ```bash
 make build
-PCR_API_TOKENS=test-token ./bin/pcr-server
+PCR_API_TOKENS=test-token PCR_SESSION_SECRET=my-test-secret ./bin/pcr-server
 ```
 
 The server listens on `:8080` by default. Override with `PCR_ADDR`.
+
+`PCR_SESSION_SECRET` is the HMAC key for dashboard session cookies. If omitted, a
+random key is generated (sessions won't survive server restarts).
 
 ### Shell alias for convenience
 
@@ -247,32 +250,52 @@ pcr -X POST http://localhost:8080/api/v1/events -d '{
 
 ## 4. Testing the dashboard
 
-1. Open your browser to:
+### Logging in
 
-   ```
-   http://localhost:8080/?token=test-token
-   ```
+The dashboard uses cookie-based sessions. Log in by navigating to:
 
-2. **Time range buttons** -- Click "Last 5 min", "Last 30 min", "Last 1 hr",
-   etc. Verify the event list updates accordingly.
+```
+http://localhost:8080/login?token=test-token
+```
 
-3. **Tag filtering** -- Click any tag badge (e.g. `env=prod`) on an event row.
+This validates the token, sets an HttpOnly session cookie, and redirects to
+the dashboard at `/`. You should see the dashboard without any token in the URL.
+
+To test login failure, try an invalid token:
+
+```
+http://localhost:8080/login?token=wrong
+```
+
+Expected: 401 Unauthorized.
+
+### Dashboard features
+
+1. **Time range buttons** -- Click "Last 5 min", "Last 30 min", "Last 1 hr",
+   etc. Verify the event list updates accordingly. "Last 24 hours" is the
+   default when the dashboard first loads.
+
+2. **Tag filtering** -- Click any tag badge (e.g. `env=prod`) on an event row.
    The event list should filter to show only events with that tag.
 
-4. **Star toggle** -- Click the star icon on an event row. The star should
+3. **Star toggle** -- Click the star icon on an event row. The star should
    toggle on and off. Reload the page to confirm the change persisted (a new
    meta-event should exist).
 
-5. **Alert highlighting** -- Create an alert meta-event for an event (see
+4. **Alert highlighting** -- Create an alert meta-event for an event (see
    section 2 above). The row for that event should have a light red background.
 
-6. **Event detail page** -- Click the timestamp of an event to navigate to its
+5. **Event detail page** -- Click the timestamp of an event to navigate to its
    detail page. Verify the full event data (including `long_description`) is
    shown, along with annotation state.
 
-7. **Back to dashboard** -- On the detail page, click the "Back to dashboard"
-   link. Verify you are returned to the dashboard and the token is preserved
-   in the URL (you should not be prompted to re-authenticate).
+6. **Back to dashboard** -- On the detail page, click the "Back to dashboard"
+   link. Verify you are returned to the dashboard. The session cookie handles
+   authentication automatically -- no token in the URL.
+
+7. **Session persistence** -- Close and reopen the browser tab. Navigate to
+   `http://localhost:8080/`. You should still be authenticated (cookie is valid
+   for 24 hours).
 
 ---
 

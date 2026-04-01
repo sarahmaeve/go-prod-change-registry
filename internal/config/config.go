@@ -1,7 +1,9 @@
 package config
 
 import (
+	"crypto/rand"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -13,6 +15,7 @@ type Config struct {
 	Addr                string
 	DatabasePath        string
 	APITokens           []string
+	SessionSecret       []byte
 	RequireAuthReads    bool
 	AutoMigrate         bool
 	DashboardRefreshSec int
@@ -54,6 +57,19 @@ func Load() (*Config, error) {
 	cfg.APITokens = tokens
 	if len(cfg.APITokens) == 0 {
 		return nil, fmt.Errorf("PCR_API_TOKENS contains no valid tokens")
+	}
+
+	// PCR_SESSION_SECRET — required for dashboard cookie sessions.
+	// If not set, generate a random secret (sessions won't survive restarts).
+	if v := os.Getenv("PCR_SESSION_SECRET"); v != "" {
+		cfg.SessionSecret = []byte(v)
+	} else {
+		secret := make([]byte, 32)
+		if _, err := rand.Read(secret); err != nil {
+			return nil, fmt.Errorf("generate session secret: %w", err)
+		}
+		cfg.SessionSecret = secret
+		slog.Warn("PCR_SESSION_SECRET not set, using ephemeral secret (sessions will not survive restarts)")
 	}
 
 	// PCR_REQUIRE_AUTH_READS

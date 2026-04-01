@@ -2,19 +2,18 @@
 <section class="filters">
     <div class="time-range-bar">
         <span class="time-range-label">Time range:</span>
-        <a href="/?range=5m{{if .Token}}&token={{.Token}}{{end}}" class="time-range-btn{{if eq .Filters.Range "5m"}} active{{end}}">Last 5 min</a>
-        <a href="/?range=30m{{if .Token}}&token={{.Token}}{{end}}" class="time-range-btn{{if eq .Filters.Range "30m"}} active{{end}}">Last 30 min</a>
-        <a href="/?range=1h{{if .Token}}&token={{.Token}}{{end}}" class="time-range-btn{{if eq .Filters.Range "1h"}} active{{end}}">Last hour</a>
-        <a href="/?range=24h{{if .Token}}&token={{.Token}}{{end}}" class="time-range-btn{{if eq .Filters.Range "24h"}} active{{end}}">Last 24 hours</a>
-        <a href="/?range=custom{{if .Token}}&token={{.Token}}{{end}}" class="time-range-btn{{if eq .Filters.Range "custom"}} active{{end}}" id="custom-toggle">Custom</a>
+        <a href="/?range=5m" class="time-range-btn{{if eq .Filters.Range "5m"}} active{{end}}">Last 5 min</a>
+        <a href="/?range=30m" class="time-range-btn{{if eq .Filters.Range "30m"}} active{{end}}">Last 30 min</a>
+        <a href="/?range=1h" class="time-range-btn{{if eq .Filters.Range "1h"}} active{{end}}">Last hour</a>
+        <a href="/?range=24h" class="time-range-btn{{if eq .Filters.Range "24h"}} active{{end}}">Last 24 hours</a>
+        <a href="/?range=custom" class="time-range-btn{{if eq .Filters.Range "custom"}} active{{end}}" id="custom-toggle">Custom</a>
         <span class="time-range-sep"></span>
-        <a href="/?alerted=true{{if .Token}}&token={{.Token}}{{end}}" class="time-range-btn btn-alerts{{if .Filters.Alerted}} active{{end}}">Alerts</a>
-        {{if or .Filters.Range .Filters.Alerted}}<a href="/?{{if .Token}}token={{.Token}}{{end}}" class="btn-clear">Clear</a>{{end}}
+        <a href="/?alerted=true" class="time-range-btn btn-alerts{{if .Filters.Alerted}} active{{end}}">Alerts</a>
+        {{if or .Filters.Range .Filters.Alerted}}<a href="/" class="btn-clear">Clear</a>{{end}}
     </div>
 
     <form method="GET" action="/" class="filter-form" id="custom-range"{{if ne .Filters.Range "custom"}} style="display:none"{{end}}>
         <input type="hidden" name="range" value="custom">
-        {{if .Token}}<input type="hidden" name="token" value="{{.Token}}">{{end}}
         <div class="filter-group">
             <label for="start_after">From</label>
             <input type="datetime-local" id="start_after" name="start_after" value="{{.Filters.StartAfter}}">
@@ -39,7 +38,6 @@
     {{if and (ne .Filters.Range "custom") (ne .Filters.Range "")}}
     <form method="GET" action="/" class="filter-form filter-form-inline">
         <input type="hidden" name="range" value="{{.Filters.Range}}">
-        {{if .Token}}<input type="hidden" name="token" value="{{.Token}}">{{end}}
         <div class="filter-group">
             <label for="type2">Event Type</label>
             <input type="text" id="type2" name="type" placeholder="e.g. deployment" value="{{.Filters.EventType}}">
@@ -69,7 +67,7 @@ document.getElementById('custom-toggle').addEventListener('click', function(e) {
 <div class="active-filters">
     <span>Filtering by tags:</span>
     {{range .Filters.Tags}}
-    <span class="badge badge-active">{{.}} <a href="/?{{if $.Token}}token={{$.Token}}{{end}}" class="badge-remove">&times;</a></span>
+    <span class="badge badge-active">{{.}} <a href="/" class="badge-remove">&times;</a></span>
     {{end}}
 </div>
 {{end}}
@@ -91,21 +89,21 @@ document.getElementById('custom-toggle').addEventListener('click', function(e) {
             {{range .Events}}
             <tr class="type-{{.EventType}}{{if .Alerted}} row-alerted{{end}}">
                 <td class="col-status">
-                    <form method="POST" action="/events/{{.ID}}/star{{if $.Token}}?token={{$.Token}}{{end}}" class="star-form">
+                    <form method="POST" action="/events/{{.ID}}/star" class="star-form">
                         <button type="submit" class="star-btn{{if .Starred}} starred{{end}}" title="{{if .Starred}}Unstar{{else}}Star{{end}}">
                             {{if .Starred}}&#9733;{{else}}&#9734;{{end}}
                         </button>
                     </form>
                     {{if .Alerted}}<span class="alert-icon" title="Alert">&#9888;</span>{{end}}
                 </td>
-                <td><a href="/events/{{.ID}}{{if $.Token}}?token={{$.Token}}{{end}}">{{formatTime .Timestamp}}</a></td>
+                <td><a href="/events/{{.ID}}">{{formatTime .Timestamp}}</a></td>
                 <td>{{.UserName}}</td>
                 <td>{{.EventType}}</td>
                 <td>{{.Description}}</td>
                 <td>
                     {{$tags := .Tags}}
                     {{range $k, $v := $tags}}
-                    <a href="{{tagFilterURL $k $v $.Token}}" class="badge badge-link">{{$k}}={{$v}}</a>
+                    <a href="{{tagFilterURL $k $v}}" class="badge badge-link">{{$k}}={{$v}}</a>
                     {{end}}
                 </td>
             </tr>
