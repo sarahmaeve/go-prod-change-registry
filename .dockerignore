@@ -1,0 +1,11 @@
+bin/
+*.db
+*.db-wal
+*.db-shm
+.git
+.gitignore
+.env
+.golangci.yml
+*.md
+docs/
+LICENSE
