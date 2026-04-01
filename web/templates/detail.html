@@ -16,19 +16,18 @@
 
         <dt>Status</dt>
         <dd>
-            {{if .Event.Starred}}<span class="star-indicator starred">&#9733; Starred</span>{{end}}
-            {{if .Event.Alerted}}<span class="alert-indicator">&#9888; Alert</span>{{end}}
-            {{if and (not .Event.Starred) (not .Event.Alerted)}}&mdash;{{end}}
+            {{if .Annotations.Starred}}<span class="star-indicator starred">&#9733; Starred</span>{{end}}
+            {{if .Annotations.Alerted}}<span class="alert-indicator">&#9888; Alert</span>{{end}}
+            {{if and (not .Annotations.Starred) (not .Annotations.Alerted)}}&mdash;{{end}}
         </dd>
 
-        <dt>Start Time</dt>
-        <dd>{{formatTime .Event.TimestampStart}}</dd>
+        <dt>Timestamp</dt>
+        <dd>{{formatTime .Event.Timestamp}}</dd>
 
-        <dt>End Time</dt>
-        <dd>{{if .Event.TimestampEnd}}{{formatTime (deref .Event.TimestampEnd)}}{{else}}&mdash;{{end}}</dd>
-
-        <dt>Duration</dt>
-        <dd>{{formatDuration .Event.TimestampStart .Event.TimestampEnd}}</dd>
+        {{if .Event.ParentID}}
+        <dt>Parent Event</dt>
+        <dd><a href="/events/{{.Event.ParentID}}{{if .Token}}?token={{.Token}}{{end}}">{{.Event.ParentID}}</a></dd>
+        {{end}}
 
         <dt>Description</dt>
         <dd>{{.Event.Description}}</dd>

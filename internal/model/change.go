@@ -7,31 +7,43 @@ const (
 	EventTypeDeployment  = "deployment"
 	EventTypeFeatureFlag = "feature-flag"
 	EventTypeK8sChange   = "k8s-change"
+
+	// Meta-event types for annotations.
+	EventTypeStar      = "star"
+	EventTypeUnstar    = "unstar"
+	EventTypeAlert     = "alert"
+	EventTypeClearAlert = "clear-alert"
 )
 
-// ChangeEvent represents a single production change recorded in the registry.
+// ChangeEvent represents a single production change or meta-event recorded in the registry.
+// Events are immutable once created. Status changes (star, alert) are modeled as
+// meta-events with a ParentID referencing the original event.
 type ChangeEvent struct {
 	ID              string            `json:"id"`
+	ParentID        string            `json:"parent_id,omitempty"`
 	UserName        string            `json:"user_name"`
-	TimestampStart  time.Time         `json:"timestamp_start"`
-	TimestampEnd    *time.Time        `json:"timestamp_end,omitempty"`
+	Timestamp       time.Time         `json:"timestamp"`
 	EventType       string            `json:"event_type"`
 	Description     string            `json:"description"`
 	LongDescription string            `json:"long_description"`
-	Starred         bool              `json:"starred"`
-	Alerted         bool              `json:"alerted"`
 	Tags            map[string]string `json:"tags,omitempty"`
 	CreatedAt       time.Time         `json:"created_at"`
-	UpdatedAt       time.Time         `json:"updated_at"`
+}
+
+// IsMetaEvent returns true if this event is an annotation on another event.
+func (e ChangeEvent) IsMetaEvent() bool {
+	return e.ParentID != ""
 }
 
 // ListParams holds the filtering and pagination parameters for listing change events.
 type ListParams struct {
 	StartAfter  *time.Time        `json:"start_after,omitempty"`
 	StartBefore *time.Time        `json:"start_before,omitempty"`
+	Around      *time.Time        `json:"around,omitempty"`
+	Window      *time.Duration    `json:"window,omitempty"`
 	UserName    string            `json:"user_name,omitempty"`
 	EventType   string            `json:"event_type,omitempty"`
-	Alerted     *bool             `json:"alerted,omitempty"`
+	TopLevel    bool              `json:"top_level,omitempty"`
 	Tags        map[string]string `json:"tags,omitempty"`
 	Limit       int               `json:"limit"`
 	Offset      int               `json:"offset"`
@@ -40,12 +52,16 @@ type ListParams struct {
 // DefaultLimit is the default number of results returned by List.
 const DefaultLimit = 50
 
-// EffectiveLimit returns the Limit to use, defaulting to DefaultLimit when zero.
+// EffectiveLimit returns the Limit to use, clamped to [1, 200] with a default of 50.
 func (p ListParams) EffectiveLimit() int {
-	if p.Limit <= 0 {
+	switch {
+	case p.Limit <= 0:
 		return DefaultLimit
+	case p.Limit > 200:
+		return 200
+	default:
+		return p.Limit
 	}
-	return p.Limit
 }
 
 // ListResult is the paginated result of a List query.
@@ -56,27 +72,19 @@ type ListResult struct {
 	Offset     int           `json:"offset"`
 }
 
-// CreateChangeRequest is the payload for creating a new change event.
+// CreateChangeRequest is the API request body for creating a new change event.
 type CreateChangeRequest struct {
+	ParentID        string            `json:"parent_id,omitempty"`
 	UserName        string            `json:"user_name"`
+	Timestamp       *time.Time        `json:"timestamp,omitempty"`
 	EventType       string            `json:"event_type"`
 	Description     string            `json:"description"`
-	LongDescription string            `json:"long_description"`
-	TimestampStart  *time.Time        `json:"timestamp_start,omitempty"`
-	TimestampEnd    *time.Time        `json:"timestamp_end,omitempty"`
+	LongDescription string            `json:"long_description,omitempty"`
 	Tags            map[string]string `json:"tags,omitempty"`
 }
 
-// UpdateChangeRequest is the payload for partially updating a change event.
-// All fields are pointers so that only provided fields are applied.
-type UpdateChangeRequest struct {
-	UserName        *string            `json:"user_name,omitempty"`
-	EventType       *string            `json:"event_type,omitempty"`
-	Description     *string            `json:"description,omitempty"`
-	LongDescription *string            `json:"long_description,omitempty"`
-	TimestampStart  *time.Time         `json:"timestamp_start,omitempty"`
-	TimestampEnd    *time.Time         `json:"timestamp_end,omitempty"`
-	Tags            *map[string]string `json:"tags,omitempty"`
-	Starred         *bool              `json:"starred,omitempty"`
-	Alerted         *bool              `json:"alerted,omitempty"`
+// EventAnnotations holds the derived annotation state for an event.
+type EventAnnotations struct {
+	Starred bool `json:"starred"`
+	Alerted bool `json:"alerted"`
 }

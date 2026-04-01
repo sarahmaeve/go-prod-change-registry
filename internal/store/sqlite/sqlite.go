@@ -11,8 +11,6 @@ import (
 
 	"github.com/sarah/go-prod-change-registry/internal/model"
 	"github.com/sarah/go-prod-change-registry/internal/store"
-
-	_ "modernc.org/sqlite"
 )
 
 // Compile-time interface check.
@@ -24,45 +22,13 @@ type Store struct {
 	slowQueryThreshold time.Duration
 }
 
-// New opens a SQLite database at dbPath and configures connection pragmas.
-// Schema creation is handled by migrations — the store does not manage schema directly.
-// busyTimeout controls how long SQLite waits for a write lock before returning SQLITE_BUSY.
+// New wraps an existing *sql.DB connection as a Store.
 // slowQueryThreshold sets the duration above which store operations are logged at Warn level.
-func New(dbPath string, busyTimeout, slowQueryThreshold time.Duration) (*Store, error) {
-	busyTimeoutMs := busyTimeout.Milliseconds()
-	dsn := fmt.Sprintf(
-		"file:%s?_pragma=journal_mode(wal)&_pragma=foreign_keys(on)&_pragma=busy_timeout(%d)",
-		dbPath,
-		busyTimeoutMs,
-	)
-
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("sqlite open: %w", err)
-	}
-
-	// Verify the connection is usable.
-	if err := db.Ping(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("sqlite ping: %w", err)
-	}
-
-	slog.Info(
-		"sqlite store opened",
-		"path", dbPath,
-		"busy_timeout_ms", busyTimeoutMs,
-		"slow_query_threshold", slowQueryThreshold,
-	)
-
+func New(db *sql.DB, slowQueryThreshold time.Duration) *Store {
 	return &Store{
 		db:                 db,
 		slowQueryThreshold: slowQueryThreshold,
-	}, nil
-}
-
-// GetDB returns the underlying *sql.DB, useful for database migrations.
-func (s *Store) GetDB() *sql.DB {
-	return s.db
+	}
 }
 
 // Close closes the underlying database connection.
@@ -111,26 +77,23 @@ func (s *Store) Create(ctx context.Context, event *model.ChangeEvent) (result *m
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	var tsEnd *string
-	if event.TimestampEnd != nil {
-		v := event.TimestampEnd.Format(time.RFC3339)
-		tsEnd = &v
+	var parentID *string
+	if event.ParentID != "" {
+		parentID = &event.ParentID
 	}
 
-	_, err = tx.ExecContext(ctx,
-		`INSERT INTO change_events (id, user_name, timestamp_start, timestamp_end, event_type, description, long_description, starred, alerted, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err = tx.ExecContext(
+		ctx,
+		`INSERT INTO change_events (id, parent_id, user_name, timestamp, event_type, description, long_description, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.ID,
+		parentID,
 		event.UserName,
-		event.TimestampStart.Format(time.RFC3339),
-		tsEnd,
+		event.Timestamp.Format(time.RFC3339),
 		event.EventType,
 		event.Description,
 		event.LongDescription,
-		boolToInt(event.Starred),
-		boolToInt(event.Alerted),
 		event.CreatedAt.Format(time.RFC3339),
-		event.UpdatedAt.Format(time.RFC3339),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("insert event: %w", err)
@@ -153,9 +116,12 @@ func (s *Store) GetByID(ctx context.Context, id string) (result *model.ChangeEve
 	start := time.Now()
 	defer func() { s.logOperation(ctx, "GetByID", start, err) }()
 
-	row := s.db.QueryRowContext(ctx,
-		`SELECT id, user_name, timestamp_start, timestamp_end, event_type, description, long_description, starred, alerted, created_at, updated_at
-		 FROM change_events WHERE id = ?`, id)
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, parent_id, user_name, timestamp, event_type, description, long_description, created_at
+		 FROM change_events WHERE id = ?`,
+		id,
+	)
 
 	ev, err := scanEvent(row)
 	if err != nil {
@@ -172,79 +138,6 @@ func (s *Store) GetByID(ctx context.Context, id string) (result *model.ChangeEve
 	ev.Tags = tags[ev.ID]
 
 	return ev, nil
-}
-
-// Update modifies an existing change event and replaces its tags within a transaction.
-func (s *Store) Update(ctx context.Context, event *model.ChangeEvent) (result *model.ChangeEvent, err error) {
-	start := time.Now()
-	defer func() { s.logOperation(ctx, "Update", start, err) }()
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-
-	var tsEnd *string
-	if event.TimestampEnd != nil {
-		v := event.TimestampEnd.Format(time.RFC3339)
-		tsEnd = &v
-	}
-
-	_, err = tx.ExecContext(ctx,
-		`UPDATE change_events
-		 SET user_name = ?, timestamp_start = ?, timestamp_end = ?, event_type = ?, description = ?, long_description = ?, starred = ?, alerted = ?, updated_at = ?
-		 WHERE id = ?`,
-		event.UserName,
-		event.TimestampStart.Format(time.RFC3339),
-		tsEnd,
-		event.EventType,
-		event.Description,
-		event.LongDescription,
-		boolToInt(event.Starred),
-		boolToInt(event.Alerted),
-		event.UpdatedAt.Format(time.RFC3339),
-		event.ID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("update event: %w", err)
-	}
-
-	// Replace tags: delete old, insert new.
-	if _, err := tx.ExecContext(ctx, `DELETE FROM change_event_tags WHERE event_id = ?`, event.ID); err != nil {
-		return nil, fmt.Errorf("delete old tags: %w", err)
-	}
-
-	if err := insertTags(ctx, tx, event.ID, event.Tags); err != nil {
-		return nil, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit tx: %w", err)
-	}
-
-	return s.GetByID(ctx, event.ID)
-}
-
-// Delete removes a change event by ID. Returns an error if the event does not exist.
-func (s *Store) Delete(ctx context.Context, id string) (err error) {
-	start := time.Now()
-	defer func() { s.logOperation(ctx, "Delete", start, err) }()
-
-	res, err := s.db.ExecContext(ctx, `DELETE FROM change_events WHERE id = ?`, id)
-	if err != nil {
-		return fmt.Errorf("delete event: %w", err)
-	}
-
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return fmt.Errorf("event %s not found", id)
-	}
-
-	return nil
 }
 
 // List queries change events with optional filters and pagination.
@@ -264,10 +157,12 @@ func (s *Store) List(ctx context.Context, params model.ListParams) (result *mode
 
 	// Fetch the page.
 	selectQuery := fmt.Sprintf(
-		`SELECT id, user_name, timestamp_start, timestamp_end, event_type, description, long_description, starred, alerted, created_at, updated_at
+		`SELECT id, parent_id, user_name, timestamp, event_type, description, long_description, created_at
 		 FROM change_events%s
-		 ORDER BY timestamp_start DESC, id ASC
-		 LIMIT ? OFFSET ?`, where)
+		 ORDER BY timestamp DESC, id ASC
+		 LIMIT ? OFFSET ?`,
+		where,
+	)
 
 	fetchArgs := make([]any, 0, len(args)+2)
 	fetchArgs = append(fetchArgs, args...)
@@ -311,91 +206,193 @@ func (s *Store) List(ctx context.Context, params model.ListParams) (result *mode
 	}, nil
 }
 
-// boolToInt converts a bool to an int for SQLite storage.
-func boolToInt(b bool) int {
-	if b {
-		return 1
+// GetAnnotations returns the derived annotation state (starred, alerted) for a
+// single event by walking its meta-events in reverse chronological order.
+func (s *Store) GetAnnotations(ctx context.Context, eventID string) (result *model.EventAnnotations, err error) {
+	start := time.Now()
+	defer func() { s.logOperation(ctx, "GetAnnotations", start, err) }()
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT event_type FROM change_events
+		 WHERE parent_id = ? AND event_type IN ('star', 'unstar', 'alert', 'clear-alert')
+		 ORDER BY created_at DESC, id DESC`,
+		eventID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query annotations: %w", err)
 	}
-	return 0
+	defer rows.Close()
+
+	annotations := &model.EventAnnotations{}
+	starResolved := false
+	alertResolved := false
+
+	for rows.Next() {
+		if starResolved && alertResolved {
+			break
+		}
+
+		var eventType string
+		if err := rows.Scan(&eventType); err != nil {
+			return nil, fmt.Errorf("scan annotation: %w", err)
+		}
+
+		switch eventType {
+		case "star":
+			if !starResolved {
+				annotations.Starred = true
+				starResolved = true
+			}
+		case "unstar":
+			if !starResolved {
+				annotations.Starred = false
+				starResolved = true
+			}
+		case "alert":
+			if !alertResolved {
+				annotations.Alerted = true
+				alertResolved = true
+			}
+		case "clear-alert":
+			if !alertResolved {
+				annotations.Alerted = false
+				alertResolved = true
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration: %w", err)
+	}
+
+	return annotations, nil
+}
+
+// GetAnnotationsBatch returns the derived annotation state for multiple events.
+func (s *Store) GetAnnotationsBatch(ctx context.Context, eventIDs []string) (result map[string]*model.EventAnnotations, err error) {
+	start := time.Now()
+	defer func() { s.logOperation(ctx, "GetAnnotationsBatch", start, err) }()
+
+	if len(eventIDs) == 0 {
+		return make(map[string]*model.EventAnnotations), nil
+	}
+
+	placeholders := make([]string, len(eventIDs))
+	args := make([]any, len(eventIDs))
+	for i, id := range eventIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+
+	query := fmt.Sprintf(
+		`SELECT parent_id, event_type FROM change_events
+		 WHERE parent_id IN (%s) AND event_type IN ('star', 'unstar', 'alert', 'clear-alert')
+		 ORDER BY created_at DESC, id DESC`,
+		strings.Join(placeholders, ","),
+	)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query annotations batch: %w", err)
+	}
+	defer rows.Close()
+
+	// Track which annotations have been resolved per parent.
+	type resolvedState struct {
+		starResolved  bool
+		alertResolved bool
+	}
+	resolved := make(map[string]*resolvedState)
+	annotations := make(map[string]*model.EventAnnotations)
+
+	// Initialize entries for all requested IDs.
+	for _, id := range eventIDs {
+		annotations[id] = &model.EventAnnotations{}
+		resolved[id] = &resolvedState{}
+	}
+
+	for rows.Next() {
+		var parentID, eventType string
+		if err := rows.Scan(&parentID, &eventType); err != nil {
+			return nil, fmt.Errorf("scan annotation: %w", err)
+		}
+
+		state := resolved[parentID]
+		if state == nil {
+			continue
+		}
+
+		switch eventType {
+		case "star":
+			if !state.starResolved {
+				annotations[parentID].Starred = true
+				state.starResolved = true
+			}
+		case "unstar":
+			if !state.starResolved {
+				annotations[parentID].Starred = false
+				state.starResolved = true
+			}
+		case "alert":
+			if !state.alertResolved {
+				annotations[parentID].Alerted = true
+				state.alertResolved = true
+			}
+		case "clear-alert":
+			if !state.alertResolved {
+				annotations[parentID].Alerted = false
+				state.alertResolved = true
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration: %w", err)
+	}
+
+	return annotations, nil
 }
 
 // --- helpers ---
-
-// insertTags inserts all tags for an event within the given transaction.
-func insertTags(ctx context.Context, tx *sql.Tx, eventID string, tags map[string]string) error {
-	if len(tags) == 0 {
-		return nil
-	}
-
-	stmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO change_event_tags (event_id, key, value) VALUES (?, ?, ?)`)
-	if err != nil {
-		return fmt.Errorf("prepare insert tags: %w", err)
-	}
-	defer stmt.Close()
-
-	for k, v := range tags {
-		if _, err := stmt.ExecContext(ctx, eventID, k, v); err != nil {
-			return fmt.Errorf("insert tag %q: %w", k, err)
-		}
-	}
-
-	return nil
-}
 
 // scanner is satisfied by both *sql.Row and *sql.Rows.
 type scanner interface {
 	Scan(dest ...any) error
 }
 
-// scanEventFields scans a change_events row into a ChangeEvent.
-func scanEventFields(s scanner) (*model.ChangeEvent, error) {
+// scanEventFields scans 8 columns from a change_events row into a ChangeEvent.
+func scanEventFields(sc scanner) (*model.ChangeEvent, error) {
 	var ev model.ChangeEvent
-	var tsStart, createdAt, updatedAt string
-	var tsEnd *string
-	var starred, alerted int
+	var parentID *string
+	var timestamp, createdAt string
 
-	err := s.Scan(
+	err := sc.Scan(
 		&ev.ID,
+		&parentID,
 		&ev.UserName,
-		&tsStart,
-		&tsEnd,
+		&timestamp,
 		&ev.EventType,
 		&ev.Description,
 		&ev.LongDescription,
-		&starred,
-		&alerted,
 		&createdAt,
-		&updatedAt,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	ev.Starred = starred != 0
-	ev.Alerted = alerted != 0
-
-	ev.TimestampStart, err = time.Parse(time.RFC3339, tsStart)
-	if err != nil {
-		return nil, fmt.Errorf("parse timestamp_start: %w", err)
+	// Convert nullable parent_id to string (empty when NULL).
+	if parentID != nil {
+		ev.ParentID = *parentID
 	}
 
-	if tsEnd != nil {
-		t, err := time.Parse(time.RFC3339, *tsEnd)
-		if err != nil {
-			return nil, fmt.Errorf("parse timestamp_end: %w", err)
-		}
-		ev.TimestampEnd = &t
+	var parseErr error
+	ev.Timestamp, parseErr = time.Parse(time.RFC3339, timestamp)
+	if parseErr != nil {
+		return nil, fmt.Errorf("parse timestamp: %w", parseErr)
 	}
 
-	ev.CreatedAt, err = time.Parse(time.RFC3339, createdAt)
-	if err != nil {
-		return nil, fmt.Errorf("parse created_at: %w", err)
-	}
-
-	ev.UpdatedAt, err = time.Parse(time.RFC3339, updatedAt)
-	if err != nil {
-		return nil, fmt.Errorf("parse updated_at: %w", err)
+	ev.CreatedAt, parseErr = time.Parse(time.RFC3339, createdAt)
+	if parseErr != nil {
+		return nil, fmt.Errorf("parse created_at: %w", parseErr)
 	}
 
 	return &ev, nil
@@ -416,6 +413,30 @@ func scanEvent(row *sql.Row) (*model.ChangeEvent, error) {
 // scanEventFromRows scans from *sql.Rows (the cursor is already on a valid row).
 func scanEventFromRows(rows *sql.Rows) (*model.ChangeEvent, error) {
 	return scanEventFields(rows)
+}
+
+// insertTags inserts all tags for an event within the given transaction.
+func insertTags(ctx context.Context, tx *sql.Tx, eventID string, tags map[string]string) error {
+	if len(tags) == 0 {
+		return nil
+	}
+
+	stmt, err := tx.PrepareContext(
+		ctx,
+		`INSERT INTO change_event_tags (event_id, key, value) VALUES (?, ?, ?)`,
+	)
+	if err != nil {
+		return fmt.Errorf("prepare insert tags: %w", err)
+	}
+	defer stmt.Close()
+
+	for k, v := range tags {
+		if _, err := stmt.ExecContext(ctx, eventID, k, v); err != nil {
+			return fmt.Errorf("insert tag %q: %w", k, err)
+		}
+	}
+
+	return nil
 }
 
 // loadTagsForEvents fetches tags for the given event IDs in one query.
@@ -462,14 +483,24 @@ func buildWhereClause(params model.ListParams) (string, []any) {
 	clauses := make([]string, 0)
 	args := make([]any, 0)
 
-	if params.StartAfter != nil {
-		clauses = append(clauses, "timestamp_start >= ?")
-		args = append(args, params.StartAfter.Format(time.RFC3339))
-	}
+	// Around+Window takes precedence over StartAfter/StartBefore when set.
+	if params.Around != nil && params.Window != nil && *params.Window > 0 {
+		windowStart := params.Around.Add(-*params.Window)
+		windowEnd := params.Around.Add(*params.Window)
+		clauses = append(clauses, "timestamp >= ?")
+		args = append(args, windowStart.Format(time.RFC3339))
+		clauses = append(clauses, "timestamp < ?")
+		args = append(args, windowEnd.Format(time.RFC3339))
+	} else {
+		if params.StartAfter != nil {
+			clauses = append(clauses, "timestamp >= ?")
+			args = append(args, params.StartAfter.Format(time.RFC3339))
+		}
 
-	if params.StartBefore != nil {
-		clauses = append(clauses, "timestamp_start < ?")
-		args = append(args, params.StartBefore.Format(time.RFC3339))
+		if params.StartBefore != nil {
+			clauses = append(clauses, "timestamp < ?")
+			args = append(args, params.StartBefore.Format(time.RFC3339))
+		}
 	}
 
 	if params.UserName != "" {
@@ -482,13 +513,12 @@ func buildWhereClause(params model.ListParams) (string, []any) {
 		args = append(args, params.EventType)
 	}
 
-	if params.Alerted != nil {
-		clauses = append(clauses, "alerted = ?")
-		args = append(args, boolToInt(*params.Alerted))
+	if params.TopLevel {
+		clauses = append(clauses, "parent_id IS NULL")
 	}
 
 	if len(params.Tags) > 0 {
-		tagClauses := make([]string, 0)
+		tagClauses := make([]string, 0, len(params.Tags))
 		for k, v := range params.Tags {
 			tagClauses = append(tagClauses, "(key = ? AND value = ?)")
 			args = append(args, k, v)

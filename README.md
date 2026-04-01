@@ -1,6 +1,6 @@
 # go-prod-change-registry
 
-A lightweight Go service that records production changes (deployments, feature-flag flips, infrastructure mutations) in a SQLite-backed registry. It exposes a RESTful API and an HTML dashboard so teams can correlate production changes with incidents and understand what changed, when, and by whom.
+A lightweight, append-only change registry for production environments. It records deployments, feature-flag flips, infrastructure mutations, and other production changes as immutable events in a SQLite-backed store, then exposes them through a RESTful API and an HTML dashboard. Teams use it to correlate production changes with incidents and understand what changed, when, and by whom.
 
 ## Quickstart
 
@@ -41,26 +41,30 @@ alias pcr='curl -s -H "Authorization: Bearer $PCR_TOKEN" -H "Content-Type: appli
 
 ### Endpoints
 
+The API is append-only. There are no PUT, PATCH, or DELETE endpoints. Events are immutable once created.
+
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/v1/health` | Health check |
-| POST | `/api/v1/events` | Create a change event |
-| GET | `/api/v1/events` | List events (with filters) |
-| GET | `/api/v1/events/{id}` | Get a single event |
-| PUT | `/api/v1/events/{id}` | Partial update of an event |
-| DELETE | `/api/v1/events/{id}` | Delete an event |
-| POST | `/api/v1/events/{id}/star` | Toggle the starred flag |
+| `GET` | `/api/v1/health` | Health check |
+| `POST` | `/api/v1/events` | Create a change event or meta-event |
+| `GET` | `/api/v1/events` | List events (with filters) |
+| `GET` | `/api/v1/events/{id}` | Get a single event |
+| `GET` | `/api/v1/events/{id}/annotations` | Get derived annotation state (starred, alerted) |
+| `POST` | `/api/v1/events/{id}/star` | Toggle star (creates a star or unstar meta-event) |
 
 ### Query parameters for `GET /api/v1/events`
 
 | Parameter | Type | Description |
 |---|---|---|
-| `start_after` | RFC 3339 timestamp | Events starting after this time |
-| `start_before` | RFC 3339 timestamp | Events starting before this time |
+| `start_after` | RFC 3339 timestamp | Events with timestamp after this time |
+| `start_before` | RFC 3339 timestamp | Events with timestamp before this time |
+| `around` | RFC 3339 timestamp | Center of a time window (use with `window`) |
+| `window` | Go duration (e.g. `30m`) | Half-width of the time window around `around` |
 | `user` | string | Filter by user name |
 | `type` | string | Filter by event type (`deployment`, `feature-flag`, `k8s-change`, ...) |
 | `tag` | string | Filter by tag (`key=value`) |
-| `limit` | int | Max results (default 50) |
+| `top_level` | bool | If `true`, exclude meta-events (only events without a `parent_id`) |
+| `limit` | int | Max results, 1-200 (default 50) |
 | `offset` | int | Pagination offset |
 
 ### Examples
@@ -89,25 +93,36 @@ pcr -X POST http://localhost:8080/api/v1/events -d '{
 pcr "http://localhost:8080/api/v1/events?type=deployment&start_after=2026-03-30T00:00:00Z&limit=10"
 ```
 
+**Window query (incident correlation):**
+
+```bash
+pcr "http://localhost:8080/api/v1/events?around=2026-03-31T14:32:00Z&window=30m"
+```
+
+This returns all events within 30 minutes of the given timestamp -- useful for answering "what changed around the time of an incident?"
+
+**List top-level events only (exclude meta-events):**
+
+```bash
+pcr "http://localhost:8080/api/v1/events?top_level=true"
+```
+
 **Get a single event:**
 
 ```bash
 pcr http://localhost:8080/api/v1/events/abc123
 ```
 
-**Update an event (partial):**
+**Get annotations for an event (derived star/alert state):**
 
 ```bash
-pcr -X PUT http://localhost:8080/api/v1/events/abc123 -d '{
-  "description": "Deploy payments-service v2.4.2 (rollback)",
-  "alerted": true
-}'
+pcr http://localhost:8080/api/v1/events/abc123/annotations
 ```
 
-**Delete an event:**
+Returns:
 
-```bash
-pcr -X DELETE http://localhost:8080/api/v1/events/abc123
+```json
+{"starred": true, "alerted": false}
 ```
 
 **Toggle star:**
@@ -116,34 +131,103 @@ pcr -X DELETE http://localhost:8080/api/v1/events/abc123
 pcr -X POST http://localhost:8080/api/v1/events/abc123/star
 ```
 
+This creates a `star` or `unstar` meta-event depending on the current state.
+
+## Meta-Events
+
+Status changes are not stored as mutable fields on an event. Instead, they are modeled as new, immutable meta-events that reference the original event via `parent_id`.
+
+### How it works
+
+To star an event, a new event is created:
+
+```json
+{
+  "parent_id": "original-event-id",
+  "event_type": "star",
+  "user_name": "sarah",
+  "description": "starred"
+}
+```
+
+To unstar, another meta-event is created:
+
+```json
+{
+  "parent_id": "original-event-id",
+  "event_type": "unstar",
+  "user_name": "sarah",
+  "description": "unstarred"
+}
+```
+
+The current state is derived by looking at the most recent meta-event. The `GET /api/v1/events/{id}/annotations` endpoint returns the computed state.
+
+### Meta-event types
+
+| Type | Effect |
+|---|---|
+| `star` | Marks the parent event as starred |
+| `unstar` | Removes the star from the parent event |
+| `alert` | Marks the parent event as alerted |
+| `clear-alert` | Removes the alert from the parent event |
+
+### Lifecycle via linked events
+
+A deployment lifecycle (or any multi-phase operation) is modeled as separate events sharing a tag rather than as a single event with start/end timestamps:
+
+```bash
+# Deploy started
+pcr -X POST http://localhost:8080/api/v1/events -d '{
+  "event_type": "deployment",
+  "user_name": "alice",
+  "description": "deploy v1.2 started",
+  "tags": {"deploy_id": "abc123", "phase": "start", "env": "prod"}
+}'
+
+# Deploy completed (separate event, same deploy_id tag)
+pcr -X POST http://localhost:8080/api/v1/events -d '{
+  "event_type": "deployment",
+  "user_name": "alice",
+  "description": "deploy v1.2 completed",
+  "tags": {"deploy_id": "abc123", "phase": "end", "env": "prod"}
+}'
+```
+
+Query by tag to see the full lifecycle:
+
+```bash
+pcr "http://localhost:8080/api/v1/events?tag=deploy_id%3Dabc123"
+```
+
 ## Dashboard
 
 The built-in HTML dashboard is served at `/` and requires authentication via the `?token=` query parameter (e.g., `/?token=my-secret-token`). It provides:
 
 - Time range buttons to filter events by predefined windows (last hour, 6h, 24h, 7d, etc.)
-- Clickable tags that filter the event list
-- A star toggle on each event for quick bookmarking
-- Visual alert highlighting for events marked with `alerted: true`
+- Clickable tags that filter the event list to matching events
+- A star toggle on each event (creates star/unstar meta-events behind the scenes)
+- Visual alert highlighting for events that have active alert meta-events
+- Event detail page showing the event plus its annotation history (meta-event timeline)
 - Auto-refresh at a configurable interval (see `PCR_DASHBOARD_REFRESH_SEC`)
 
 ## Data Model
 
-The core `ChangeEvent` struct:
+Events are immutable. There are no update or delete operations. The core `ChangeEvent` struct:
 
 | Field | Type | Description |
 |---|---|---|
 | `id` | string | Unique identifier (generated) |
+| `parent_id` | string (optional) | References another event's ID, making this a meta-event |
 | `user_name` | string | Who made the change |
-| `timestamp_start` | RFC 3339 | When the change started |
-| `timestamp_end` | RFC 3339 (optional) | When the change ended |
-| `event_type` | string | Category: `deployment`, `feature-flag`, `k8s-change`, or custom |
+| `timestamp` | RFC 3339 | When the change happened |
+| `event_type` | string | Category: `deployment`, `feature-flag`, `k8s-change`, or custom. Meta-events use `star`, `unstar`, `alert`, `clear-alert` |
 | `description` | string | Short summary |
 | `long_description` | string | Detailed description |
-| `starred` | bool | Bookmarked by a user |
-| `alerted` | bool | Associated with an alert/incident |
-| `tags` | map[string]string | Arbitrary key-value metadata |
+| `tags` | map[string]string | Arbitrary key-value metadata for filtering and lifecycle linking |
 | `created_at` | RFC 3339 | Record creation time |
-| `updated_at` | RFC 3339 | Last modification time |
+
+Notably absent from the old model: `timestamp_start`, `timestamp_end`, `starred`, `alerted`, and `updated_at`. These are replaced by the single `timestamp` field, meta-events, and the principle that events do not change after creation.
 
 ## Architecture
 
@@ -151,14 +235,15 @@ The core `ChangeEvent` struct:
 cmd/server/        Entry point (main)
 internal/
   config/          Environment-based configuration
-  model/           Domain types (ChangeEvent, request/response structs)
-  store/           SQLite data access layer
+  model/           Domain types (ChangeEvent, ListParams, request/response structs)
+  store/           SQLite data access layer (ChangeStore interface)
   service/         Business logic
   handler/         HTTP handlers (API + dashboard)
   middleware/      Auth, request ID, logging
   router/          Route definitions (chi)
 migrations/        SQL migration files
 web/               Embedded static assets and HTML templates
+docs/              Design documents and roadmap
 ```
 
 ## Development
@@ -175,6 +260,7 @@ web/               Embedded static assets and HTML templates
 | `make run` | `go run ./cmd/server` |
 | `make vet` | Run `go vet` |
 | `make audit` | Run `go vet` + `govulncheck` |
+| `make clean` | Remove build artifacts |
 
 ### Integration tests
 

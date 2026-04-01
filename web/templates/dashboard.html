@@ -81,7 +81,6 @@ document.getElementById('custom-toggle').addEventListener('click', function(e) {
             <tr>
                 <th class="col-status"></th>
                 <th>Time</th>
-                <th>Duration</th>
                 <th>User</th>
                 <th>Type</th>
                 <th>Description</th>
@@ -99,8 +98,7 @@ document.getElementById('custom-toggle').addEventListener('click', function(e) {
                     </form>
                     {{if .Alerted}}<span class="alert-icon" title="Alert">&#9888;</span>{{end}}
                 </td>
-                <td><a href="/events/{{.ID}}{{if $.Token}}?token={{$.Token}}{{end}}">{{formatTime .TimestampStart}}</a></td>
-                <td>{{formatDuration .TimestampStart .TimestampEnd}}</td>
+                <td><a href="/events/{{.ID}}{{if $.Token}}?token={{$.Token}}{{end}}">{{formatTime .Timestamp}}</a></td>
                 <td>{{.UserName}}</td>
                 <td>{{.EventType}}</td>
                 <td>{{.Description}}</td>

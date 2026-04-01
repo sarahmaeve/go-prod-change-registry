@@ -2,12 +2,13 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -20,6 +21,8 @@ import (
 	"github.com/sarah/go-prod-change-registry/internal/service"
 	sqlitestore "github.com/sarah/go-prod-change-registry/internal/store/sqlite"
 	"github.com/sarah/go-prod-change-registry/migrations"
+
+	_ "modernc.org/sqlite"
 )
 
 func main() {
@@ -30,21 +33,36 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Open SQLite store.
-	store, err := sqlitestore.New(cfg.DatabasePath, cfg.DBBusyTimeout, cfg.DBSlowQueryThreshold)
+	// Open the database connection directly.
+	dsn := fmt.Sprintf(
+		"file:%s?_pragma=journal_mode(wal)&_pragma=foreign_keys(on)&_pragma=busy_timeout(%d)",
+		cfg.DatabasePath,
+		cfg.DBBusyTimeout.Milliseconds(),
+	)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		slog.Error("failed to open database", "error", err)
 		os.Exit(1)
 	}
-	defer store.Close()
+	defer db.Close()
+
+	slog.Info(
+		"sqlite database opened",
+		"path", cfg.DatabasePath,
+		"busy_timeout_ms", cfg.DBBusyTimeout.Milliseconds(),
+		"slow_query_threshold", cfg.DBSlowQueryThreshold,
+	)
 
 	// Run migrations if configured.
 	if cfg.AutoMigrate {
-		if err := runMigrations(store); err != nil {
+		if err := runMigrations(db); err != nil {
 			slog.Error("failed to run migrations", "error", err)
 			os.Exit(1)
 		}
 	}
+
+	// Create SQLite store wrapping the open connection.
+	store := sqlitestore.New(db, cfg.DBSlowQueryThreshold)
 
 	// Create service and handlers.
 	svc := service.NewChangeService(store)
@@ -87,13 +105,13 @@ func main() {
 }
 
 // runMigrations applies database migrations from the embedded filesystem.
-func runMigrations(store *sqlitestore.Store) error {
+func runMigrations(db *sql.DB) error {
 	sourceDriver, err := iofs.New(migrations.FS, ".")
 	if err != nil {
 		return err
 	}
 
-	dbDriver, err := sqlitedriver.WithInstance(store.GetDB(), &sqlitedriver.Config{})
+	dbDriver, err := sqlitedriver.WithInstance(db, &sqlitedriver.Config{})
 	if err != nil {
 		return err
 	}
@@ -108,8 +126,7 @@ func runMigrations(store *sqlitestore.Store) error {
 		return err
 	}
 
-	// If a previous migration left the DB in a dirty state (e.g., a migration
-	// partially applied columns that already existed), resolve it before proceeding.
+	// Handle dirty state from a previously failed migration.
 	version, dirty, verr := m.Version()
 	if verr != nil && !errors.Is(verr, migrate.ErrNoChange) && !errors.Is(verr, migrate.ErrNilVersion) {
 		return verr
@@ -125,21 +142,7 @@ func runMigrations(store *sqlitestore.Store) error {
 	}
 
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		// Handle SQLite "duplicate column name" errors gracefully.
-		// This occurs when a migration adds a column that already exists,
-		// e.g., from a schema change that was applied outside of migrations.
-		if strings.Contains(err.Error(), "duplicate column name") {
-			slog.Warn(
-				"migration has duplicate column, forcing version",
-				"error", err,
-			)
-			ver, _, _ := m.Version()
-			if ferr := m.Force(int(ver)); ferr != nil {
-				return ferr
-			}
-		} else {
-			return err
-		}
+		return err
 	}
 
 	slog.Info("database migrations applied successfully")

@@ -19,11 +19,11 @@ import (
 
 // mockStore implements store.ChangeStore with configurable function fields.
 type mockStore struct {
-	createFn  func(ctx context.Context, event *model.ChangeEvent) (*model.ChangeEvent, error)
-	getByIDFn func(ctx context.Context, id string) (*model.ChangeEvent, error)
-	updateFn  func(ctx context.Context, event *model.ChangeEvent) (*model.ChangeEvent, error)
-	deleteFn  func(ctx context.Context, id string) error
-	listFn    func(ctx context.Context, params model.ListParams) (*model.ListResult, error)
+	createFn              func(ctx context.Context, event *model.ChangeEvent) (*model.ChangeEvent, error)
+	getByIDFn             func(ctx context.Context, id string) (*model.ChangeEvent, error)
+	listFn                func(ctx context.Context, params model.ListParams) (*model.ListResult, error)
+	getAnnotationsFn      func(ctx context.Context, eventID string) (*model.EventAnnotations, error)
+	getAnnotationsBatchFn func(ctx context.Context, eventIDs []string) (map[string]*model.EventAnnotations, error)
 }
 
 var _ store.ChangeStore = (*mockStore)(nil)
@@ -42,25 +42,25 @@ func (m *mockStore) GetByID(ctx context.Context, id string) (*model.ChangeEvent,
 	panic("unexpected call to GetByID")
 }
 
-func (m *mockStore) Update(ctx context.Context, event *model.ChangeEvent) (*model.ChangeEvent, error) {
-	if m.updateFn != nil {
-		return m.updateFn(ctx, event)
-	}
-	panic("unexpected call to Update")
-}
-
-func (m *mockStore) Delete(ctx context.Context, id string) error {
-	if m.deleteFn != nil {
-		return m.deleteFn(ctx, id)
-	}
-	panic("unexpected call to Delete")
-}
-
 func (m *mockStore) List(ctx context.Context, params model.ListParams) (*model.ListResult, error) {
 	if m.listFn != nil {
 		return m.listFn(ctx, params)
 	}
 	panic("unexpected call to List")
+}
+
+func (m *mockStore) GetAnnotations(ctx context.Context, eventID string) (*model.EventAnnotations, error) {
+	if m.getAnnotationsFn != nil {
+		return m.getAnnotationsFn(ctx, eventID)
+	}
+	panic("unexpected call to GetAnnotations")
+}
+
+func (m *mockStore) GetAnnotationsBatch(ctx context.Context, eventIDs []string) (map[string]*model.EventAnnotations, error) {
+	if m.getAnnotationsBatchFn != nil {
+		return m.getAnnotationsBatchFn(ctx, eventIDs)
+	}
+	panic("unexpected call to GetAnnotationsBatch")
 }
 
 func (m *mockStore) Close() error { return nil }
@@ -71,6 +71,7 @@ const testToken = "test-secret-token"
 func newTestRouter(t *testing.T, requireAuthReads bool) (http.Handler, *mockStore) {
 	t.Helper()
 
+	now := time.Now().UTC()
 	ms := &mockStore{
 		listFn: func(_ context.Context, _ model.ListParams) (*model.ListResult, error) {
 			return &model.ListResult{
@@ -84,6 +85,22 @@ func newTestRouter(t *testing.T, requireAuthReads bool) (http.Handler, *mockStor
 			cp := *event
 			return &cp, nil
 		},
+		getByIDFn: func(_ context.Context, _ string) (*model.ChangeEvent, error) {
+			return &model.ChangeEvent{
+				ID:          "some-id",
+				UserName:    "test",
+				EventType:   "deployment",
+				Description: "test event",
+				Timestamp:   now,
+				CreatedAt:   now,
+			}, nil
+		},
+		getAnnotationsFn: func(_ context.Context, _ string) (*model.EventAnnotations, error) {
+			return &model.EventAnnotations{Starred: false, Alerted: false}, nil
+		},
+		getAnnotationsBatchFn: func(_ context.Context, _ []string) (map[string]*model.EventAnnotations, error) {
+			return map[string]*model.EventAnnotations{}, nil
+		},
 	}
 
 	svc := service.NewChangeService(ms)
@@ -91,7 +108,7 @@ func newTestRouter(t *testing.T, requireAuthReads bool) (http.Handler, *mockStor
 	dashH := handler.NewDashboardHandler(svc, 0)
 
 	cfg := &config.Config{
-		APITokens:       []string{testToken},
+		APITokens:        []string{testToken},
 		RequireAuthReads: requireAuthReads,
 	}
 
@@ -130,15 +147,14 @@ func TestAuthEnforcement(t *testing.T) {
 				path:   "/api/v1/events/some-id",
 			},
 			{
-				name:   "PUT /api/v1/events/{id} without auth",
-				method: http.MethodPut,
-				path:   "/api/v1/events/some-id",
-				body:   `{"description":"updated"}`,
+				name:   "GET /api/v1/events/{id}/annotations without auth",
+				method: http.MethodGet,
+				path:   "/api/v1/events/some-id/annotations",
 			},
 			{
-				name:   "DELETE /api/v1/events/{id} without auth",
-				method: http.MethodDelete,
-				path:   "/api/v1/events/some-id",
+				name:   "POST /api/v1/events/{id}/star without auth",
+				method: http.MethodPost,
+				path:   "/api/v1/events/some-id/star",
 			},
 			{
 				name:   "GET / (dashboard) without auth",
@@ -174,6 +190,36 @@ func TestAuthEnforcement(t *testing.T) {
 		}
 	})
 
+	t.Run("no PUT or DELETE routes return 405", func(t *testing.T) {
+		t.Parallel()
+
+		r, _ := newTestRouter(t, true)
+
+		tests := []struct {
+			name   string
+			method string
+			path   string
+		}{
+			{"PUT /api/v1/events/{id}", http.MethodPut, "/api/v1/events/some-id"},
+			{"DELETE /api/v1/events/{id}", http.MethodDelete, "/api/v1/events/some-id"},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				req := httptest.NewRequest(tc.method, tc.path, nil)
+				req.Header.Set("Authorization", "Bearer "+testToken)
+				rec := httptest.NewRecorder()
+				r.ServeHTTP(rec, req)
+
+				if rec.Code != http.StatusMethodNotAllowed {
+					t.Fatalf("expected 405 for %s %s, got %d", tc.method, tc.path, rec.Code)
+				}
+			})
+		}
+	})
+
 	t.Run("health endpoint is accessible without auth", func(t *testing.T) {
 		t.Parallel()
 
@@ -187,7 +233,7 @@ func TestAuthEnforcement(t *testing.T) {
 		}
 	})
 
-	t.Run("Bearer token allows storing events", func(t *testing.T) {
+	t.Run("Bearer token allows creating events", func(t *testing.T) {
 		t.Parallel()
 
 		r, _ := newTestRouter(t, true)
@@ -234,102 +280,50 @@ func TestAuthEnforcement(t *testing.T) {
 		}
 	})
 
-	t.Run("invalid query param token is rejected", func(t *testing.T) {
+	t.Run("invalid token is rejected", func(t *testing.T) {
 		t.Parallel()
 
 		r, _ := newTestRouter(t, true)
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/events?token=wrong", nil)
-		rec := httptest.NewRecorder()
-		r.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("expected 401, got %d", rec.Code)
+		tests := []struct {
+			name   string
+			method string
+			path   string
+			token  string
+		}{
+			{"invalid query param token", http.MethodGet, "/api/v1/events?token=wrong", ""},
+			{"invalid bearer token", http.MethodPost, "/api/v1/events", "wrong-token"},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				req := httptest.NewRequest(tc.method, tc.path, nil)
+				if tc.token != "" {
+					req.Header.Set("Authorization", "Bearer "+tc.token)
+				}
+				rec := httptest.NewRecorder()
+				r.ServeHTTP(rec, req)
+
+				if rec.Code != http.StatusUnauthorized {
+					t.Fatalf("expected 401, got %d", rec.Code)
+				}
+			})
 		}
 	})
 
-	t.Run("event cannot be stored with invalid token", func(t *testing.T) {
+	t.Run("store not called on auth failure", func(t *testing.T) {
 		t.Parallel()
 
 		r, ms := newTestRouter(t, true)
 
-		// Track whether the store was ever called.
 		storeCalled := false
 		ms.createFn = func(_ context.Context, event *model.ChangeEvent) (*model.ChangeEvent, error) {
 			storeCalled = true
 			cp := *event
 			return &cp, nil
 		}
-
-		body := `{"user_name":"sarah","event_type":"deployment","description":"sneaky deploy"}`
-		req := httptest.NewRequest(
-			http.MethodPost,
-			"/api/v1/events",
-			bytes.NewBufferString(body),
-		)
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer wrong-token")
-
-		rec := httptest.NewRecorder()
-		r.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("expected 401, got %d", rec.Code)
-		}
-		if storeCalled {
-			t.Fatal("store.Create was called despite invalid auth — event was persisted without authentication")
-		}
-	})
-
-	t.Run("events cannot be listed with invalid token", func(t *testing.T) {
-		t.Parallel()
-
-		r, ms := newTestRouter(t, true)
-
-		storeCalled := false
-		ms.listFn = func(_ context.Context, _ model.ListParams) (*model.ListResult, error) {
-			storeCalled = true
-			return &model.ListResult{
-				Events: []model.ChangeEvent{
-					{
-						ID:             "secret-event",
-						UserName:       "admin",
-						TimestampStart: time.Now(),
-						EventType:      "deployment",
-						Description:    "secret deploy",
-						Tags:           make(map[string]string),
-						CreatedAt:      time.Now(),
-						UpdatedAt:      time.Now(),
-					},
-				},
-				TotalCount: 1,
-				Limit:      50,
-				Offset:     0,
-			}, nil
-		}
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil)
-		rec := httptest.NewRecorder()
-		r.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("expected 401, got %d", rec.Code)
-		}
-		if storeCalled {
-			t.Fatal("store.List was called despite missing auth — events were exposed without authentication")
-		}
-
-		// Verify the response body does not contain event data.
-		if bytes.Contains(rec.Body.Bytes(), []byte("secret-event")) {
-			t.Fatal("response body contains event data despite 401 — data leaked without authentication")
-		}
-	})
-
-	t.Run("dashboard not accessible with invalid token", func(t *testing.T) {
-		t.Parallel()
-
-		r, ms := newTestRouter(t, true)
-
-		storeCalled := false
 		ms.listFn = func(_ context.Context, _ model.ListParams) (*model.ListResult, error) {
 			storeCalled = true
 			return &model.ListResult{
@@ -340,7 +334,11 @@ func TestAuthEnforcement(t *testing.T) {
 			}, nil
 		}
 
-		req := httptest.NewRequest(http.MethodGet, "/?token=wrong", nil)
+		// Try a POST without auth.
+		body := `{"user_name":"sarah","event_type":"deployment","description":"sneaky deploy"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/events", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer wrong-token")
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, req)
 
@@ -348,7 +346,19 @@ func TestAuthEnforcement(t *testing.T) {
 			t.Fatalf("expected 401, got %d", rec.Code)
 		}
 		if storeCalled {
-			t.Fatal("store.List was called despite invalid auth — dashboard was rendered without authentication")
+			t.Fatal("store was called despite invalid auth")
+		}
+
+		// Try a GET without auth.
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/events", nil)
+		rec = httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d", rec.Code)
+		}
+		if storeCalled {
+			t.Fatal("store was called despite missing auth")
 		}
 	})
 

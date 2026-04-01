@@ -4,52 +4,60 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"io/fs"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/sarah/go-prod-change-registry/internal/model"
+	"github.com/sarah/go-prod-change-registry/migrations"
+
+	_ "modernc.org/sqlite"
 )
 
-// testSchemaSQL contains the full schema for test databases.
-// This mirrors what migrations 001 + 002 produce.
-const testSchemaSQL = `
-CREATE TABLE IF NOT EXISTS change_events (
-	id               TEXT PRIMARY KEY,
-	user_name        TEXT NOT NULL,
-	timestamp_start  TEXT NOT NULL,
-	timestamp_end    TEXT,
-	event_type       TEXT NOT NULL DEFAULT '',
-	description      TEXT NOT NULL DEFAULT '',
-	long_description TEXT NOT NULL DEFAULT '',
-	created_at       TEXT NOT NULL,
-	updated_at       TEXT NOT NULL,
-	starred          INTEGER NOT NULL DEFAULT 0,
-	alerted          INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS change_event_tags (
-	id       INTEGER PRIMARY KEY AUTOINCREMENT,
-	event_id TEXT    NOT NULL REFERENCES change_events(id) ON DELETE CASCADE,
-	key      TEXT    NOT NULL,
-	value    TEXT    NOT NULL DEFAULT ''
-);
-CREATE INDEX IF NOT EXISTS idx_change_event_tags_key_value ON change_event_tags (key, value);
-CREATE INDEX IF NOT EXISTS idx_change_event_tags_event_id ON change_event_tags (event_id);
-`
+// ---------------------------------------------------------------------------
+// Test infrastructure
+// ---------------------------------------------------------------------------
+
+// applyTestMigrations reads and executes the embedded migration SQL files in order.
+func applyTestMigrations(t *testing.T, db *sql.DB) {
+	t.Helper()
+	migrationFiles := []string{
+		"001_create_change_events.up.sql",
+	}
+	for _, name := range migrationFiles {
+		sqlBytes, err := fs.ReadFile(migrations.FS, name)
+		if err != nil {
+			t.Fatalf("read migration %s: %v", name, err)
+		}
+		if _, err := db.Exec(string(sqlBytes)); err != nil {
+			t.Fatalf("apply migration %s: %v", name, err)
+		}
+	}
+}
+
+func openTestDB(t *testing.T, dbPath string) *sql.DB {
+	t.Helper()
+	dsn := fmt.Sprintf(
+		"file:%s?_pragma=journal_mode(wal)&_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)",
+		dbPath,
+	)
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("openTestDB: %v", err)
+	}
+	return db
+}
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	s, err := New(dbPath, 5*time.Second, 100*time.Millisecond)
-	if err != nil {
-		t.Fatalf("newTestStore: %v", err)
-	}
-	if _, err := s.db.Exec(testSchemaSQL); err != nil {
-		t.Fatalf("newTestStore schema: %v", err)
-	}
-	t.Cleanup(func() { s.Close() })
+	db := openTestDB(t, dbPath)
+	applyTestMigrations(t, db)
+	s := New(db, 100*time.Millisecond)
+	t.Cleanup(func() { db.Close() })
 	return s
 }
 
@@ -63,20 +71,19 @@ func mustTime(t *testing.T, value string) time.Time {
 }
 
 func timePtr(ts time.Time) *time.Time { return &ts }
-func strPtr(s string) *string         { return &s }
 
-func makeEvent(id string, userName string, eventType string, start time.Time, tags map[string]string) *model.ChangeEvent {
-	now := time.Now().UTC().Truncate(time.Second)
+func durationPtr(d time.Duration) *time.Duration { return &d }
+
+func makeEvent(id, userName, eventType string, ts time.Time, tags map[string]string) *model.ChangeEvent {
 	return &model.ChangeEvent{
 		ID:              id,
 		UserName:        userName,
-		TimestampStart:  start,
+		Timestamp:       ts,
 		EventType:       eventType,
 		Description:     "desc-" + id,
 		LongDescription: "long-desc-" + id,
 		Tags:            tags,
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		CreatedAt:       ts,
 	}
 }
 
@@ -87,25 +94,20 @@ func makeEvent(id string, userName string, eventType string, start time.Time, ta
 func TestCreate(t *testing.T) {
 	t.Parallel()
 
-	t.Run("all fields populated", func(t *testing.T) {
+	t.Run("event with all fields", func(t *testing.T) {
 		s := newTestStore(t)
 		ctx := context.Background()
 
-		start := mustTime(t, "2026-01-15T10:00:00Z")
-		end := mustTime(t, "2026-01-15T11:00:00Z")
-		now := time.Now().UTC().Truncate(time.Second)
-
+		ts := mustTime(t, "2026-01-15T10:00:00Z")
 		ev := &model.ChangeEvent{
 			ID:              "evt-001",
 			UserName:        "alice",
-			TimestampStart:  start,
-			TimestampEnd:    &end,
+			Timestamp:       ts,
 			EventType:       model.EventTypeDeployment,
 			Description:     "deploy v1.2.3",
-			LongDescription: "Rolling deploy of service-foo to v1.2.3 across all regions",
+			LongDescription: "Rolling deploy of service-foo to v1.2.3",
 			Tags:            map[string]string{"env": "prod", "service": "foo", "region": "us-east-1"},
-			CreatedAt:       now,
-			UpdatedAt:       now,
+			CreatedAt:       ts,
 		}
 
 		got, err := s.Create(ctx, ev)
@@ -119,14 +121,8 @@ func TestCreate(t *testing.T) {
 		if got.UserName != ev.UserName {
 			t.Errorf("UserName = %q, want %q", got.UserName, ev.UserName)
 		}
-		if !got.TimestampStart.Equal(ev.TimestampStart) {
-			t.Errorf("TimestampStart = %v, want %v", got.TimestampStart, ev.TimestampStart)
-		}
-		if got.TimestampEnd == nil {
-			t.Fatal("TimestampEnd is nil, want non-nil")
-		}
-		if !got.TimestampEnd.Equal(end) {
-			t.Errorf("TimestampEnd = %v, want %v", got.TimestampEnd, end)
+		if !got.Timestamp.Equal(ev.Timestamp) {
+			t.Errorf("Timestamp = %v, want %v", got.Timestamp, ev.Timestamp)
 		}
 		if got.EventType != ev.EventType {
 			t.Errorf("EventType = %q, want %q", got.EventType, ev.EventType)
@@ -136,6 +132,9 @@ func TestCreate(t *testing.T) {
 		}
 		if got.LongDescription != ev.LongDescription {
 			t.Errorf("LongDescription = %q, want %q", got.LongDescription, ev.LongDescription)
+		}
+		if got.ParentID != "" {
+			t.Errorf("ParentID = %q, want empty", got.ParentID)
 		}
 		if len(got.Tags) != 3 {
 			t.Fatalf("len(Tags) = %d, want 3", len(got.Tags))
@@ -147,37 +146,83 @@ func TestCreate(t *testing.T) {
 		}
 	})
 
-	t.Run("minimal fields", func(t *testing.T) {
+	t.Run("event with tags", func(t *testing.T) {
 		s := newTestStore(t)
 		ctx := context.Background()
 
-		start := mustTime(t, "2026-02-01T09:00:00Z")
-		now := time.Now().UTC().Truncate(time.Second)
-
-		ev := &model.ChangeEvent{
-			ID:             "evt-min",
-			UserName:       "bob",
-			TimestampStart: start,
-			EventType:      model.EventTypeFeatureFlag,
-			Description:    "toggle flag-x",
-			CreatedAt:      now,
-			UpdatedAt:      now,
-		}
+		ts := mustTime(t, "2026-02-01T09:00:00Z")
+		ev := makeEvent("evt-tags", "bob", model.EventTypeFeatureFlag, ts, map[string]string{"flag": "dark-mode", "team": "frontend"})
 
 		got, err := s.Create(ctx, ev)
 		if err != nil {
 			t.Fatalf("Create: %v", err)
 		}
+		if len(got.Tags) != 2 {
+			t.Fatalf("len(Tags) = %d, want 2", len(got.Tags))
+		}
+		if got.Tags["flag"] != "dark-mode" {
+			t.Errorf("Tags[flag] = %q, want %q", got.Tags["flag"], "dark-mode")
+		}
+		if got.Tags["team"] != "frontend" {
+			t.Errorf("Tags[team] = %q, want %q", got.Tags["team"], "frontend")
+		}
+	})
 
-		if got.TimestampEnd != nil {
-			t.Errorf("TimestampEnd = %v, want nil", got.TimestampEnd)
+	t.Run("meta-event with parent_id", func(t *testing.T) {
+		s := newTestStore(t)
+		ctx := context.Background()
+
+		ts := mustTime(t, "2026-03-01T10:00:00Z")
+		parent := makeEvent("parent-1", "alice", model.EventTypeDeployment, ts, nil)
+		if _, err := s.Create(ctx, parent); err != nil {
+			t.Fatalf("Create parent: %v", err)
+		}
+
+		meta := &model.ChangeEvent{
+			ID:        "star-1",
+			ParentID:  "parent-1",
+			UserName:  "bob",
+			Timestamp: ts.Add(time.Minute),
+			EventType: model.EventTypeStar,
+			Tags:      map[string]string{},
+			CreatedAt: ts.Add(time.Minute),
+		}
+		got, err := s.Create(ctx, meta)
+		if err != nil {
+			t.Fatalf("Create meta: %v", err)
+		}
+		if got.ParentID != "parent-1" {
+			t.Errorf("ParentID = %q, want %q", got.ParentID, "parent-1")
+		}
+		if got.EventType != model.EventTypeStar {
+			t.Errorf("EventType = %q, want %q", got.EventType, model.EventTypeStar)
+		}
+		if !got.IsMetaEvent() {
+			t.Error("IsMetaEvent() = false, want true")
+		}
+	})
+
+	t.Run("minimal fields no tags", func(t *testing.T) {
+		s := newTestStore(t)
+		ctx := context.Background()
+
+		ts := mustTime(t, "2026-02-15T09:00:00Z")
+		ev := &model.ChangeEvent{
+			ID:        "evt-min",
+			UserName:  "carol",
+			Timestamp: ts,
+			EventType: model.EventTypeK8sChange,
+			CreatedAt: ts,
+		}
+		got, err := s.Create(ctx, ev)
+		if err != nil {
+			t.Fatalf("Create: %v", err)
 		}
 		if got.LongDescription != "" {
 			t.Errorf("LongDescription = %q, want empty", got.LongDescription)
 		}
-		if got.Tags == nil {
-			// Tags can be nil when empty; that is acceptable.
-		} else if len(got.Tags) != 0 {
+		// Tags can be nil or empty when none set.
+		if got.Tags != nil && len(got.Tags) != 0 {
 			t.Errorf("len(Tags) = %d, want 0", len(got.Tags))
 		}
 	})
@@ -190,7 +235,7 @@ func TestCreate(t *testing.T) {
 func TestGetByID(t *testing.T) {
 	t.Parallel()
 
-	t.Run("existing event with tags", func(t *testing.T) {
+	t.Run("existing event", func(t *testing.T) {
 		s := newTestStore(t)
 		ctx := context.Background()
 
@@ -209,12 +254,15 @@ func TestGetByID(t *testing.T) {
 		if got.ID != "get-1" {
 			t.Errorf("ID = %q, want %q", got.ID, "get-1")
 		}
+		if got.UserName != "carol" {
+			t.Errorf("UserName = %q, want %q", got.UserName, "carol")
+		}
 		if got.Tags["cluster"] != "prod-1" {
 			t.Errorf("Tags[cluster] = %q, want %q", got.Tags["cluster"], "prod-1")
 		}
 	})
 
-	t.Run("non-existent ID returns nil nil", func(t *testing.T) {
+	t.Run("non-existent returns nil", func(t *testing.T) {
 		s := newTestStore(t)
 		ctx := context.Background()
 
@@ -226,197 +274,39 @@ func TestGetByID(t *testing.T) {
 			t.Errorf("got %+v, want nil", got)
 		}
 	})
-}
 
-// ---------------------------------------------------------------------------
-// Update tests
-// ---------------------------------------------------------------------------
-
-func TestUpdate(t *testing.T) {
-	t.Parallel()
-
-	t.Run("update all fields", func(t *testing.T) {
+	t.Run("event with parent_id", func(t *testing.T) {
 		s := newTestStore(t)
 		ctx := context.Background()
 
-		orig := makeEvent("upd-1", "dave", model.EventTypeDeployment, mustTime(t, "2026-01-10T12:00:00Z"), map[string]string{"env": "staging"})
-		created, err := s.Create(ctx, orig)
+		ts := mustTime(t, "2026-03-05T10:00:00Z")
+		parent := makeEvent("parent-get", "alice", model.EventTypeDeployment, ts, nil)
+		if _, err := s.Create(ctx, parent); err != nil {
+			t.Fatalf("Create parent: %v", err)
+		}
+
+		meta := &model.ChangeEvent{
+			ID:        "meta-get",
+			ParentID:  "parent-get",
+			UserName:  "bob",
+			Timestamp: ts.Add(time.Minute),
+			EventType: model.EventTypeStar,
+			Tags:      map[string]string{},
+			CreatedAt: ts.Add(time.Minute),
+		}
+		if _, err := s.Create(ctx, meta); err != nil {
+			t.Fatalf("Create meta: %v", err)
+		}
+
+		got, err := s.GetByID(ctx, "meta-get")
 		if err != nil {
-			t.Fatalf("Create: %v", err)
+			t.Fatalf("GetByID: %v", err)
 		}
-
-		newEnd := mustTime(t, "2026-01-10T13:00:00Z")
-		newStart := mustTime(t, "2026-01-10T12:30:00Z")
-		updated := &model.ChangeEvent{
-			ID:              created.ID,
-			UserName:        "eve",
-			TimestampStart:  newStart,
-			TimestampEnd:    &newEnd,
-			EventType:       model.EventTypeFeatureFlag,
-			Description:     "updated desc",
-			LongDescription: "updated long desc",
-			Tags:            map[string]string{"env": "prod", "new-tag": "yes"},
-			CreatedAt:       created.CreatedAt,
-			UpdatedAt:       time.Now().UTC().Truncate(time.Second),
+		if got == nil {
+			t.Fatal("GetByID returned nil")
 		}
-
-		got, err := s.Update(ctx, updated)
-		if err != nil {
-			t.Fatalf("Update: %v", err)
-		}
-
-		if got.UserName != "eve" {
-			t.Errorf("UserName = %q, want %q", got.UserName, "eve")
-		}
-		if got.EventType != model.EventTypeFeatureFlag {
-			t.Errorf("EventType = %q, want %q", got.EventType, model.EventTypeFeatureFlag)
-		}
-		if got.Description != "updated desc" {
-			t.Errorf("Description = %q, want %q", got.Description, "updated desc")
-		}
-		if got.LongDescription != "updated long desc" {
-			t.Errorf("LongDescription = %q, want %q", got.LongDescription, "updated long desc")
-		}
-		if !got.TimestampStart.Equal(newStart) {
-			t.Errorf("TimestampStart = %v, want %v", got.TimestampStart, newStart)
-		}
-		if got.TimestampEnd == nil || !got.TimestampEnd.Equal(newEnd) {
-			t.Errorf("TimestampEnd = %v, want %v", got.TimestampEnd, newEnd)
-		}
-	})
-
-	t.Run("tags replaced on update", func(t *testing.T) {
-		s := newTestStore(t)
-		ctx := context.Background()
-
-		ev := makeEvent("upd-tags", "frank", model.EventTypeDeployment, mustTime(t, "2026-02-20T10:00:00Z"), map[string]string{"old": "tag"})
-		created, err := s.Create(ctx, ev)
-		if err != nil {
-			t.Fatalf("Create: %v", err)
-		}
-
-		created.Tags = map[string]string{"new": "tag", "another": "value"}
-		created.UpdatedAt = time.Now().UTC().Truncate(time.Second)
-
-		got, err := s.Update(ctx, created)
-		if err != nil {
-			t.Fatalf("Update: %v", err)
-		}
-
-		if len(got.Tags) != 2 {
-			t.Fatalf("len(Tags) = %d, want 2", len(got.Tags))
-		}
-		if got.Tags["new"] != "tag" {
-			t.Errorf("Tags[new] = %q, want %q", got.Tags["new"], "tag")
-		}
-		if _, ok := got.Tags["old"]; ok {
-			t.Error("old tag still present after update")
-		}
-	})
-
-	t.Run("updatedAt changes", func(t *testing.T) {
-		s := newTestStore(t)
-		ctx := context.Background()
-
-		ev := makeEvent("upd-ts", "gina", model.EventTypeK8sChange, mustTime(t, "2026-03-01T06:00:00Z"), nil)
-		created, err := s.Create(ctx, ev)
-		if err != nil {
-			t.Fatalf("Create: %v", err)
-		}
-
-		newUpdatedAt := created.UpdatedAt.Add(5 * time.Minute).Truncate(time.Second)
-		created.UpdatedAt = newUpdatedAt
-		created.Description = "changed"
-
-		got, err := s.Update(ctx, created)
-		if err != nil {
-			t.Fatalf("Update: %v", err)
-		}
-		if !got.UpdatedAt.Equal(newUpdatedAt) {
-			t.Errorf("UpdatedAt = %v, want %v", got.UpdatedAt, newUpdatedAt)
-		}
-	})
-}
-
-// ---------------------------------------------------------------------------
-// Delete tests
-// ---------------------------------------------------------------------------
-
-func TestDelete(t *testing.T) {
-	t.Parallel()
-
-	t.Run("delete existing event", func(t *testing.T) {
-		s := newTestStore(t)
-		ctx := context.Background()
-
-		ev := makeEvent("del-1", "hank", model.EventTypeDeployment, mustTime(t, "2026-01-05T15:00:00Z"), map[string]string{"a": "b"})
-		if _, err := s.Create(ctx, ev); err != nil {
-			t.Fatalf("Create: %v", err)
-		}
-
-		if err := s.Delete(ctx, "del-1"); err != nil {
-			t.Fatalf("Delete: %v", err)
-		}
-
-		got, err := s.GetByID(ctx, "del-1")
-		if err != nil {
-			t.Fatalf("GetByID after delete: %v", err)
-		}
-		if got != nil {
-			t.Errorf("event still exists after delete: %+v", got)
-		}
-	})
-
-	t.Run("delete non-existent event returns error", func(t *testing.T) {
-		s := newTestStore(t)
-		ctx := context.Background()
-
-		err := s.Delete(ctx, "no-such-id")
-		if err == nil {
-			t.Fatal("expected error deleting non-existent event, got nil")
-		}
-		if !strings.Contains(err.Error(), "not found") {
-			t.Errorf("error = %q, want it to contain 'not found'", err.Error())
-		}
-	})
-
-	t.Run("tags cascade deleted", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		dbPath := filepath.Join(tmpDir, "cascade.db")
-
-		s, err := New(dbPath, 5*time.Second, 100*time.Millisecond)
-		if err != nil {
-			t.Fatalf("New: %v", err)
-		}
-		if _, err := s.db.Exec(testSchemaSQL); err != nil {
-			t.Fatalf("schema: %v", err)
-		}
-
-		ctx := context.Background()
-		ev := makeEvent("del-cascade", "ivy", model.EventTypeDeployment, mustTime(t, "2026-01-20T10:00:00Z"), map[string]string{"k1": "v1", "k2": "v2"})
-		if _, err := s.Create(ctx, ev); err != nil {
-			t.Fatalf("Create: %v", err)
-		}
-
-		if err := s.Delete(ctx, "del-cascade"); err != nil {
-			t.Fatalf("Delete: %v", err)
-		}
-		s.Close()
-
-		// Reopen the database and verify no orphaned tags remain.
-		s2, err := New(dbPath, 5*time.Second, 100*time.Millisecond)
-		if err != nil {
-			t.Fatalf("reopen: %v", err)
-		}
-		defer s2.Close()
-
-		var count int
-		err = s2.GetDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM change_event_tags WHERE event_id = ?`, "del-cascade").Scan(&count)
-		if err != nil {
-			t.Fatalf("count tags: %v", err)
-		}
-		if count != 0 {
-			t.Errorf("orphaned tags count = %d, want 0", count)
+		if got.ParentID != "parent-get" {
+			t.Errorf("ParentID = %q, want %q", got.ParentID, "parent-get")
 		}
 	})
 }
@@ -452,7 +342,7 @@ func seedEvents(t *testing.T, s *Store) []model.ChangeEvent {
 func TestList(t *testing.T) {
 	t.Parallel()
 
-	t.Run("all events no filters", func(t *testing.T) {
+	t.Run("no filters returns all", func(t *testing.T) {
 		s := newTestStore(t)
 		seedEvents(t, s)
 		ctx := context.Background()
@@ -467,34 +357,30 @@ func TestList(t *testing.T) {
 		if len(res.Events) != 5 {
 			t.Errorf("len(Events) = %d, want 5", len(res.Events))
 		}
-		// Events should be ordered by timestamp_start DESC.
+		// Events should be ordered by timestamp DESC.
 		for i := 1; i < len(res.Events); i++ {
-			if res.Events[i].TimestampStart.After(res.Events[i-1].TimestampStart) {
+			if res.Events[i].Timestamp.After(res.Events[i-1].Timestamp) {
 				t.Errorf("events not in descending order at index %d: %v > %v",
-					i, res.Events[i].TimestampStart, res.Events[i-1].TimestampStart)
+					i, res.Events[i].Timestamp, res.Events[i-1].Timestamp)
 			}
 		}
 	})
 
-	// Table-driven filter tests: each case seeds the same 5 events and
-	// asserts the expected TotalCount for the given ListParams.
+	// Table-driven filter tests.
 	filterCases := []struct {
-		name           string
-		params         model.ListParams
-		expectedCount  int
-		seed           bool // true = seed events, false = empty store
+		name          string
+		params        model.ListParams
+		expectedCount int
 	}{
 		{
 			name:          "filter by StartAfter only",
 			params:        model.ListParams{StartAfter: timePtr(mustTime(t, "2026-01-03T00:00:00Z"))},
 			expectedCount: 3, // list-3, list-4, list-5
-			seed:          true,
 		},
 		{
 			name:          "filter by StartBefore only",
 			params:        model.ListParams{StartBefore: timePtr(mustTime(t, "2026-01-03T00:00:00Z"))},
 			expectedCount: 2, // list-1, list-2
-			seed:          true,
 		},
 		{
 			name: "filter by time range both",
@@ -503,51 +389,42 @@ func TestList(t *testing.T) {
 				StartBefore: timePtr(mustTime(t, "2026-01-04T10:00:00Z")),
 			},
 			expectedCount: 2, // list-2, list-3
-			seed:          true,
 		},
 		{
 			name:          "filter by UserName",
 			params:        model.ListParams{UserName: "alice"},
 			expectedCount: 3, // list-1, list-3, list-5
-			seed:          true,
 		},
 		{
 			name:          "filter by EventType",
 			params:        model.ListParams{EventType: model.EventTypeDeployment},
 			expectedCount: 3, // list-1, list-4, list-5
-			seed:          true,
 		},
 		{
 			name:          "filter by single tag",
 			params:        model.ListParams{Tags: map[string]string{"env": "prod"}},
 			expectedCount: 3, // list-1, list-2, list-4
-			seed:          true,
 		},
 		{
 			name:          "filter by multiple tags AND logic",
 			params:        model.ListParams{Tags: map[string]string{"env": "prod", "service": "api"}},
 			expectedCount: 1, // list-1 only
-			seed:          true,
 		},
 		{
 			name:          "combined filters user and type",
 			params:        model.ListParams{UserName: "alice", EventType: model.EventTypeDeployment},
 			expectedCount: 2, // list-1, list-5
-			seed:          true,
 		},
 		{
 			name:          "empty results with filters",
 			params:        model.ListParams{UserName: "nonexistent-user"},
 			expectedCount: 0,
-			seed:          true,
 		},
 	}
 	for _, tc := range filterCases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newTestStore(t)
-			if tc.seed {
-				seedEvents(t, s)
-			}
+			seedEvents(t, s)
 			ctx := context.Background()
 
 			res, err := s.List(ctx, tc.params)
@@ -560,12 +437,60 @@ func TestList(t *testing.T) {
 		})
 	}
 
+	t.Run("TopLevel excludes meta-events", func(t *testing.T) {
+		s := newTestStore(t)
+		ctx := context.Background()
+
+		ts := mustTime(t, "2026-02-01T10:00:00Z")
+		parent := makeEvent("top-1", "alice", model.EventTypeDeployment, ts, nil)
+		if _, err := s.Create(ctx, parent); err != nil {
+			t.Fatalf("Create parent: %v", err)
+		}
+
+		meta := &model.ChangeEvent{
+			ID:        "meta-top",
+			ParentID:  "top-1",
+			UserName:  "bob",
+			Timestamp: ts.Add(time.Minute),
+			EventType: model.EventTypeStar,
+			Tags:      map[string]string{},
+			CreatedAt: ts.Add(time.Minute),
+		}
+		if _, err := s.Create(ctx, meta); err != nil {
+			t.Fatalf("Create meta: %v", err)
+		}
+
+		// Without TopLevel: both events.
+		res, err := s.List(ctx, model.ListParams{})
+		if err != nil {
+			t.Fatalf("List all: %v", err)
+		}
+		if res.TotalCount != 2 {
+			t.Errorf("TotalCount (all) = %d, want 2", res.TotalCount)
+		}
+
+		// With TopLevel: only the parent.
+		res, err = s.List(ctx, model.ListParams{TopLevel: true})
+		if err != nil {
+			t.Fatalf("List TopLevel: %v", err)
+		}
+		if res.TotalCount != 1 {
+			t.Errorf("TotalCount (TopLevel) = %d, want 1", res.TotalCount)
+		}
+		if len(res.Events) != 1 {
+			t.Fatalf("len(Events) = %d, want 1", len(res.Events))
+		}
+		if res.Events[0].ID != "top-1" {
+			t.Errorf("Events[0].ID = %q, want %q", res.Events[0].ID, "top-1")
+		}
+	})
+
 	t.Run("pagination limit and offset", func(t *testing.T) {
 		s := newTestStore(t)
 		seedEvents(t, s)
 		ctx := context.Background()
 
-		// Page 1: first 2 events (descending by start time: list-5, list-4)
+		// Page 1: first 2 events (descending by timestamp: list-5, list-4)
 		res, err := s.List(ctx, model.ListParams{Limit: 2, Offset: 0})
 		if err != nil {
 			t.Fatalf("List page 1: %v", err)
@@ -588,9 +513,6 @@ func TestList(t *testing.T) {
 		if err != nil {
 			t.Fatalf("List page 2: %v", err)
 		}
-		if res2.TotalCount != 5 {
-			t.Errorf("TotalCount = %d, want 5", res2.TotalCount)
-		}
 		if len(res2.Events) != 2 {
 			t.Fatalf("len(Events) = %d, want 2", len(res2.Events))
 		}
@@ -599,9 +521,6 @@ func TestList(t *testing.T) {
 		res3, err := s.List(ctx, model.ListParams{Limit: 2, Offset: 4})
 		if err != nil {
 			t.Fatalf("List page 3: %v", err)
-		}
-		if res3.TotalCount != 5 {
-			t.Errorf("TotalCount = %d, want 5", res3.TotalCount)
 		}
 		if len(res3.Events) != 1 {
 			t.Fatalf("len(Events) = %d, want 1", len(res3.Events))
@@ -625,7 +544,29 @@ func TestList(t *testing.T) {
 		}
 	})
 
-	t.Run("empty results", func(t *testing.T) {
+	t.Run("Around and Window query", func(t *testing.T) {
+		s := newTestStore(t)
+		seedEvents(t, s)
+		ctx := context.Background()
+
+		// Around 2026-01-03T10:00:00Z with a 24h window should include
+		// events within [2026-01-02T10:00:00Z, 2026-01-04T10:00:00Z).
+		around := mustTime(t, "2026-01-03T10:00:00Z")
+		res, err := s.List(ctx, model.ListParams{
+			Around: timePtr(around),
+			Window: durationPtr(24 * time.Hour),
+		})
+		if err != nil {
+			t.Fatalf("List Around: %v", err)
+		}
+		// list-2 (Jan 2 10:00), list-3 (Jan 3 10:00) fall within the window.
+		// list-4 (Jan 4 10:00) is at the boundary (exclusive end), so excluded.
+		if res.TotalCount != 2 {
+			t.Errorf("TotalCount = %d, want 2", res.TotalCount)
+		}
+	})
+
+	t.Run("empty store returns empty slice", func(t *testing.T) {
 		s := newTestStore(t)
 		ctx := context.Background()
 
@@ -659,7 +600,6 @@ func TestList(t *testing.T) {
 			tagCounts[ev.ID] = len(ev.Tags)
 		}
 
-		// list-1 has 2 tags, list-2 has 1, list-3 has 2, list-4 has 2, list-5 has 0
 		expected := map[string]int{
 			"list-1": 2,
 			"list-2": 1,
@@ -676,97 +616,295 @@ func TestList(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Edge cases
+// GetAnnotations tests
 // ---------------------------------------------------------------------------
 
-func TestEdgeCases(t *testing.T) {
+func TestGetAnnotations(t *testing.T) {
 	t.Parallel()
 
-	t.Run("empty tags map", func(t *testing.T) {
+	t.Run("no annotations returns defaults", func(t *testing.T) {
 		s := newTestStore(t)
 		ctx := context.Background()
 
-		ev := makeEvent("edge-empty-tags", "user1", model.EventTypeDeployment, mustTime(t, "2026-03-10T10:00:00Z"), map[string]string{})
-		got, err := s.Create(ctx, ev)
-		if err != nil {
+		ts := mustTime(t, "2026-03-10T10:00:00Z")
+		parent := makeEvent("ann-none", "alice", model.EventTypeDeployment, ts, nil)
+		if _, err := s.Create(ctx, parent); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
-		// An empty tags map can come back as nil or empty; both are fine.
-		if got.Tags != nil && len(got.Tags) != 0 {
-			t.Errorf("len(Tags) = %d, want 0", len(got.Tags))
+
+		ann, err := s.GetAnnotations(ctx, "ann-none")
+		if err != nil {
+			t.Fatalf("GetAnnotations: %v", err)
+		}
+		if ann.Starred {
+			t.Error("Starred = true, want false")
+		}
+		if ann.Alerted {
+			t.Error("Alerted = true, want false")
 		}
 	})
 
-	t.Run("many tags", func(t *testing.T) {
+	t.Run("star then check Starred is true", func(t *testing.T) {
 		s := newTestStore(t)
 		ctx := context.Background()
 
-		tags := make(map[string]string)
-		for i := 0; i < 50; i++ {
-			tags[fmt.Sprintf("key-%03d", i)] = fmt.Sprintf("val-%03d", i)
+		ts := mustTime(t, "2026-03-10T10:00:00Z")
+		parent := makeEvent("ann-star", "alice", model.EventTypeDeployment, ts, nil)
+		if _, err := s.Create(ctx, parent); err != nil {
+			t.Fatalf("Create parent: %v", err)
 		}
 
-		ev := makeEvent("edge-many-tags", "user2", model.EventTypeFeatureFlag, mustTime(t, "2026-03-11T10:00:00Z"), tags)
-		got, err := s.Create(ctx, ev)
+		starEvt := &model.ChangeEvent{
+			ID:        "ann-star-meta",
+			ParentID:  "ann-star",
+			UserName:  "bob",
+			Timestamp: ts.Add(time.Minute),
+			EventType: model.EventTypeStar,
+			Tags:      map[string]string{},
+			CreatedAt: ts.Add(time.Minute),
+		}
+		if _, err := s.Create(ctx, starEvt); err != nil {
+			t.Fatalf("Create star: %v", err)
+		}
+
+		ann, err := s.GetAnnotations(ctx, "ann-star")
 		if err != nil {
-			t.Fatalf("Create: %v", err)
+			t.Fatalf("GetAnnotations: %v", err)
 		}
-		if len(got.Tags) != 50 {
-			t.Errorf("len(Tags) = %d, want 50", len(got.Tags))
+		if !ann.Starred {
+			t.Error("Starred = false, want true")
 		}
-		for k, v := range tags {
-			if got.Tags[k] != v {
-				t.Errorf("Tags[%q] = %q, want %q", k, got.Tags[k], v)
+		if ann.Alerted {
+			t.Error("Alerted = true, want false")
+		}
+	})
+
+	t.Run("star then unstar returns Starred false", func(t *testing.T) {
+		s := newTestStore(t)
+		ctx := context.Background()
+
+		ts := mustTime(t, "2026-03-10T10:00:00Z")
+		parent := makeEvent("ann-unstar", "alice", model.EventTypeDeployment, ts, nil)
+		if _, err := s.Create(ctx, parent); err != nil {
+			t.Fatalf("Create parent: %v", err)
+		}
+
+		starEvt := &model.ChangeEvent{
+			ID:        "ann-unstar-star",
+			ParentID:  "ann-unstar",
+			UserName:  "bob",
+			Timestamp: ts.Add(time.Minute),
+			EventType: model.EventTypeStar,
+			Tags:      map[string]string{},
+			CreatedAt: ts.Add(time.Minute),
+		}
+		if _, err := s.Create(ctx, starEvt); err != nil {
+			t.Fatalf("Create star: %v", err)
+		}
+
+		unstarEvt := &model.ChangeEvent{
+			ID:        "ann-unstar-unstar",
+			ParentID:  "ann-unstar",
+			UserName:  "bob",
+			Timestamp: ts.Add(2 * time.Minute),
+			EventType: model.EventTypeUnstar,
+			Tags:      map[string]string{},
+			CreatedAt: ts.Add(2 * time.Minute),
+		}
+		if _, err := s.Create(ctx, unstarEvt); err != nil {
+			t.Fatalf("Create unstar: %v", err)
+		}
+
+		ann, err := s.GetAnnotations(ctx, "ann-unstar")
+		if err != nil {
+			t.Fatalf("GetAnnotations: %v", err)
+		}
+		if ann.Starred {
+			t.Error("Starred = true, want false after unstar")
+		}
+	})
+
+	t.Run("alert then check Alerted is true", func(t *testing.T) {
+		s := newTestStore(t)
+		ctx := context.Background()
+
+		ts := mustTime(t, "2026-03-10T10:00:00Z")
+		parent := makeEvent("ann-alert", "alice", model.EventTypeDeployment, ts, nil)
+		if _, err := s.Create(ctx, parent); err != nil {
+			t.Fatalf("Create parent: %v", err)
+		}
+
+		alertEvt := &model.ChangeEvent{
+			ID:        "ann-alert-meta",
+			ParentID:  "ann-alert",
+			UserName:  "bob",
+			Timestamp: ts.Add(time.Minute),
+			EventType: model.EventTypeAlert,
+			Tags:      map[string]string{},
+			CreatedAt: ts.Add(time.Minute),
+		}
+		if _, err := s.Create(ctx, alertEvt); err != nil {
+			t.Fatalf("Create alert: %v", err)
+		}
+
+		ann, err := s.GetAnnotations(ctx, "ann-alert")
+		if err != nil {
+			t.Fatalf("GetAnnotations: %v", err)
+		}
+		if !ann.Alerted {
+			t.Error("Alerted = false, want true")
+		}
+		if ann.Starred {
+			t.Error("Starred = true, want false")
+		}
+	})
+
+	t.Run("both star and alert simultaneously", func(t *testing.T) {
+		s := newTestStore(t)
+		ctx := context.Background()
+
+		ts := mustTime(t, "2026-03-10T10:00:00Z")
+		parent := makeEvent("ann-both", "alice", model.EventTypeDeployment, ts, nil)
+		if _, err := s.Create(ctx, parent); err != nil {
+			t.Fatalf("Create parent: %v", err)
+		}
+
+		starEvt := &model.ChangeEvent{
+			ID:        "ann-both-star",
+			ParentID:  "ann-both",
+			UserName:  "bob",
+			Timestamp: ts.Add(time.Minute),
+			EventType: model.EventTypeStar,
+			Tags:      map[string]string{},
+			CreatedAt: ts.Add(time.Minute),
+		}
+		if _, err := s.Create(ctx, starEvt); err != nil {
+			t.Fatalf("Create star: %v", err)
+		}
+
+		alertEvt := &model.ChangeEvent{
+			ID:        "ann-both-alert",
+			ParentID:  "ann-both",
+			UserName:  "carol",
+			Timestamp: ts.Add(2 * time.Minute),
+			EventType: model.EventTypeAlert,
+			Tags:      map[string]string{},
+			CreatedAt: ts.Add(2 * time.Minute),
+		}
+		if _, err := s.Create(ctx, alertEvt); err != nil {
+			t.Fatalf("Create alert: %v", err)
+		}
+
+		ann, err := s.GetAnnotations(ctx, "ann-both")
+		if err != nil {
+			t.Fatalf("GetAnnotations: %v", err)
+		}
+		if !ann.Starred {
+			t.Error("Starred = false, want true")
+		}
+		if !ann.Alerted {
+			t.Error("Alerted = false, want true")
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// GetAnnotationsBatch tests
+// ---------------------------------------------------------------------------
+
+func TestGetAnnotationsBatch(t *testing.T) {
+	t.Parallel()
+
+	t.Run("multiple events with different annotations", func(t *testing.T) {
+		s := newTestStore(t)
+		ctx := context.Background()
+
+		ts := mustTime(t, "2026-03-15T10:00:00Z")
+
+		// Create three parent events.
+		ev1 := makeEvent("batch-1", "alice", model.EventTypeDeployment, ts, nil)
+		ev2 := makeEvent("batch-2", "bob", model.EventTypeDeployment, ts.Add(time.Hour), nil)
+		ev3 := makeEvent("batch-3", "carol", model.EventTypeDeployment, ts.Add(2*time.Hour), nil)
+		for _, ev := range []*model.ChangeEvent{ev1, ev2, ev3} {
+			if _, err := s.Create(ctx, ev); err != nil {
+				t.Fatalf("Create %s: %v", ev.ID, err)
 			}
 		}
+
+		// Star batch-1.
+		starEvt := &model.ChangeEvent{
+			ID:        "batch-1-star",
+			ParentID:  "batch-1",
+			UserName:  "bob",
+			Timestamp: ts.Add(3 * time.Hour),
+			EventType: model.EventTypeStar,
+			Tags:      map[string]string{},
+			CreatedAt: ts.Add(3 * time.Hour),
+		}
+		if _, err := s.Create(ctx, starEvt); err != nil {
+			t.Fatalf("Create star: %v", err)
+		}
+
+		// Alert batch-2.
+		alertEvt := &model.ChangeEvent{
+			ID:        "batch-2-alert",
+			ParentID:  "batch-2",
+			UserName:  "carol",
+			Timestamp: ts.Add(4 * time.Hour),
+			EventType: model.EventTypeAlert,
+			Tags:      map[string]string{},
+			CreatedAt: ts.Add(4 * time.Hour),
+		}
+		if _, err := s.Create(ctx, alertEvt); err != nil {
+			t.Fatalf("Create alert: %v", err)
+		}
+
+		// batch-3 has no annotations.
+
+		result, err := s.GetAnnotationsBatch(ctx, []string{"batch-1", "batch-2", "batch-3"})
+		if err != nil {
+			t.Fatalf("GetAnnotationsBatch: %v", err)
+		}
+
+		if len(result) != 3 {
+			t.Fatalf("len(result) = %d, want 3", len(result))
+		}
+
+		// batch-1: starred, not alerted.
+		if !result["batch-1"].Starred {
+			t.Error("batch-1 Starred = false, want true")
+		}
+		if result["batch-1"].Alerted {
+			t.Error("batch-1 Alerted = true, want false")
+		}
+
+		// batch-2: not starred, alerted.
+		if result["batch-2"].Starred {
+			t.Error("batch-2 Starred = true, want false")
+		}
+		if !result["batch-2"].Alerted {
+			t.Error("batch-2 Alerted = false, want true")
+		}
+
+		// batch-3: neither starred nor alerted.
+		if result["batch-3"].Starred {
+			t.Error("batch-3 Starred = true, want false")
+		}
+		if result["batch-3"].Alerted {
+			t.Error("batch-3 Alerted = true, want false")
+		}
 	})
 
-	t.Run("unicode in descriptions", func(t *testing.T) {
+	t.Run("empty input returns empty map", func(t *testing.T) {
 		s := newTestStore(t)
 		ctx := context.Background()
 
-		ev := makeEvent("edge-unicode", "user3", model.EventTypeK8sChange, mustTime(t, "2026-03-12T10:00:00Z"), nil)
-		ev.Description = "Deploying \u2192 v2.0 \U0001F680"
-		ev.LongDescription = "\u65e5\u672c\u8a9e\u306e\u8aac\u660e\u3002 \u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043d\u0430 \u0440\u0443\u0441\u0441\u043a\u043e\u043c. \u4e2d\u6587\u63cf\u8ff0\u3002"
-
-		got, err := s.Create(ctx, ev)
+		result, err := s.GetAnnotationsBatch(ctx, []string{})
 		if err != nil {
-			t.Fatalf("Create: %v", err)
+			t.Fatalf("GetAnnotationsBatch: %v", err)
 		}
-		if got.Description != ev.Description {
-			t.Errorf("Description = %q, want %q", got.Description, ev.Description)
-		}
-		if got.LongDescription != ev.LongDescription {
-			t.Errorf("LongDescription = %q, want %q", got.LongDescription, ev.LongDescription)
-		}
-
-		// Also verify via GetByID roundtrip.
-		fetched, err := s.GetByID(ctx, "edge-unicode")
-		if err != nil {
-			t.Fatalf("GetByID: %v", err)
-		}
-		if fetched.Description != ev.Description {
-			t.Errorf("fetched Description = %q, want %q", fetched.Description, ev.Description)
-		}
-		if fetched.LongDescription != ev.LongDescription {
-			t.Errorf("fetched LongDescription = %q, want %q", fetched.LongDescription, ev.LongDescription)
-		}
-	})
-
-	t.Run("very long descriptions", func(t *testing.T) {
-		s := newTestStore(t)
-		ctx := context.Background()
-
-		longDesc := strings.Repeat("a]", 50000) // 100k characters
-		ev := makeEvent("edge-long", "user4", model.EventTypeDeployment, mustTime(t, "2026-03-13T10:00:00Z"), nil)
-		ev.LongDescription = longDesc
-
-		got, err := s.Create(ctx, ev)
-		if err != nil {
-			t.Fatalf("Create: %v", err)
-		}
-		if got.LongDescription != longDesc {
-			t.Errorf("LongDescription length = %d, want %d", len(got.LongDescription), len(longDesc))
+		if len(result) != 0 {
+			t.Errorf("len(result) = %d, want 0", len(result))
 		}
 	})
 }

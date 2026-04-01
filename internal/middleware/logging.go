@@ -28,8 +28,7 @@ func (w *statusWriter) WriteHeader(code int) {
 // WriteHeader has not been called yet.
 func (w *statusWriter) Write(b []byte) (int, error) {
 	if !w.written {
-		w.status = http.StatusOK
-		w.written = true
+		w.WriteHeader(http.StatusOK)
 	}
 	return w.ResponseWriter.Write(b)
 }

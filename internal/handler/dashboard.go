@@ -31,16 +31,6 @@ func NewDashboardHandler(svc *service.ChangeService, refreshSec int) *DashboardH
 		"formatTime": func(t time.Time) string {
 			return t.UTC().Format("2006-01-02 15:04:05 UTC")
 		},
-		"formatDuration": func(start time.Time, end *time.Time) string {
-			if end == nil {
-				return "\u2014"
-			}
-			d := end.Sub(start)
-			if d < 0 {
-				d = -d
-			}
-			return d.Round(time.Second).String()
-		},
 		"formatTags": func(tags map[string]string) []string {
 			if len(tags) == 0 {
 				return []string{}
@@ -51,12 +41,6 @@ func NewDashboardHandler(svc *service.ChangeService, refreshSec int) *DashboardH
 			}
 			sort.Strings(out)
 			return out
-		},
-		"deref": func(t *time.Time) time.Time {
-			if t == nil {
-				return time.Time{}
-			}
-			return *t
 		},
 		"tagFilterURL": func(key, value, token string) string {
 			q := url.Values{}
@@ -104,10 +88,17 @@ type dashboardFilters struct {
 	Tags        []string
 }
 
+// dashboardEvent wraps a ChangeEvent with its derived annotation state.
+type dashboardEvent struct {
+	model.ChangeEvent
+	Starred bool
+	Alerted bool
+}
+
 // dashboardData is the template data for the dashboard page.
 type dashboardData struct {
 	RefreshSec  int
-	Events      []model.ChangeEvent
+	Events      []dashboardEvent
 	Filters     dashboardFilters
 	TotalCount  int
 	Limit       int
@@ -123,9 +114,10 @@ type dashboardData struct {
 
 // detailData is the template data for the detail page.
 type detailData struct {
-	RefreshSec int
-	Event      *model.ChangeEvent
-	Token      string
+	RefreshSec  int
+	Event       *model.ChangeEvent
+	Annotations *model.EventAnnotations
+	Token       string
 }
 
 // quickRanges maps the quick-select range values to durations.
@@ -140,6 +132,9 @@ var quickRanges = map[string]time.Duration{
 func (h *DashboardHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	var params model.ListParams
 	filters := dashboardFilters{}
+
+	// Dashboard shows only top-level events (not meta-events).
+	params.TopLevel = true
 
 	// Handle time range: quick-select presets or custom datetime range.
 	if rangeVal := r.URL.Query().Get("range"); rangeVal != "" {
@@ -168,8 +163,6 @@ func (h *DashboardHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 
 	if v := r.URL.Query().Get("alerted"); v == "true" {
 		filters.Alerted = true
-		alerted := true
-		params.Alerted = &alerted
 	}
 
 	if v := r.URL.Query().Get("type"); v != "" {
@@ -218,6 +211,29 @@ func (h *DashboardHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Collect event IDs and fetch annotations in batch.
+	eventIDs := make([]string, len(result.Events))
+	for i, ev := range result.Events {
+		eventIDs[i] = ev.ID
+	}
+
+	annotationsMap, err := h.svc.GetAnnotationsBatch(r.Context(), eventIDs)
+	if err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Build dashboard events combining events with their annotations.
+	dashEvents := make([]dashboardEvent, len(result.Events))
+	for i, ev := range result.Events {
+		de := dashboardEvent{ChangeEvent: ev}
+		if ann, ok := annotationsMap[ev.ID]; ok && ann != nil {
+			de.Starred = ann.Starred
+			de.Alerted = ann.Alerted
+		}
+		dashEvents[i] = de
+	}
+
 	offsetStart := offset + 1
 	if result.TotalCount == 0 {
 		offsetStart = 0
@@ -228,7 +244,7 @@ func (h *DashboardHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 
 	data := dashboardData{
 		RefreshSec:  h.refreshSec,
-		Events:      result.Events,
+		Events:      dashEvents,
 		Filters:     filters,
 		TotalCount:  result.TotalCount,
 		Limit:       result.Limit,
@@ -262,10 +278,17 @@ func (h *DashboardHandler) Detail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	annotations, err := h.svc.GetAnnotations(r.Context(), id)
+	if err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
 	data := detailData{
-		RefreshSec: 0,
-		Event:      event,
-		Token:      r.URL.Query().Get("token"),
+		RefreshSec:  0,
+		Event:       event,
+		Annotations: annotations,
+		Token:       r.URL.Query().Get("token"),
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -274,25 +297,20 @@ func (h *DashboardHandler) Detail(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ToggleStar handles POST /events/{id}/star — toggles the starred flag and redirects back.
+// ToggleStar handles POST /events/{id}/star -- posts a meta-event and redirects back.
 func (h *DashboardHandler) ToggleStar(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	event, err := h.svc.GetByID(r.Context(), id)
+	_, err := h.svc.ToggleStar(r.Context(), id, "dashboard-user")
 	if err != nil {
-		http.Error(w, "Event not found", http.StatusNotFound)
+		if errors.Is(err, service.ErrEventNotFound) {
+			http.Error(w, "Event not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	newStarred := !event.Starred
-	req := &model.UpdateChangeRequest{Starred: &newStarred}
-	_, err = h.svc.Update(r.Context(), id, req)
-	if err != nil {
-		http.Error(w, "Failed to toggle star", http.StatusInternalServerError)
-		return
-	}
-
-	// Redirect back to the referrer or dashboard.
 	referer := r.Header.Get("Referer")
 	if referer == "" {
 		referer = "/"

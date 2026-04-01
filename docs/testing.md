@@ -3,6 +3,10 @@
 This guide walks through manually testing the production change registry (PCR)
 server -- both the API and the web dashboard.
 
+The event model is **append-only**: events are immutable once created. There are
+no PUT or DELETE endpoints. Status changes (star, alert) are recorded as
+**meta-events** that reference a parent event via `parent_id`.
+
 ---
 
 ## 1. Setup
@@ -30,19 +34,30 @@ alias pcr='curl -s -H "Authorization: Bearer $PCR_TOKEN" -H "Content-Type: appli
 
 ## 2. Creating test events
 
-### A deployment with tags env=prod, service=api
+### A deployment with lifecycle tags
+
+Model a deployment as two events sharing a `deploy_id` tag, with a
+`phase:start` and `phase:end` tag respectively:
 
 ```bash
+# Deployment start
 pcr -X POST http://localhost:8080/api/v1/events -d '{
   "user_name": "alice",
   "event_type": "deployment",
-  "description": "Deploy api v2.4.1",
-  "long_description": "",
-  "tags": {"env": "prod", "service": "api"}
+  "description": "Deploy api v2.4.1 - start",
+  "tags": {"env": "prod", "service": "api", "deploy_id": "d-001", "phase": "start"}
+}' | jq
+
+# Deployment end (a few minutes later)
+pcr -X POST http://localhost:8080/api/v1/events -d '{
+  "user_name": "alice",
+  "event_type": "deployment",
+  "description": "Deploy api v2.4.1 - end",
+  "tags": {"env": "prod", "service": "api", "deploy_id": "d-001", "phase": "end"}
 }' | jq
 ```
 
-### A feature flag toggle with tag env=staging
+### A feature flag toggle
 
 ```bash
 pcr -X POST http://localhost:8080/api/v1/events -d '{
@@ -54,16 +69,14 @@ pcr -X POST http://localhost:8080/api/v1/events -d '{
 }' | jq
 ```
 
-### A k8s change with end timestamp (has duration)
+### A k8s change
 
 ```bash
 pcr -X POST http://localhost:8080/api/v1/events -d '{
   "user_name": "carol",
   "event_type": "k8s-change",
   "description": "Rolling restart of payments pods",
-  "long_description": "",
-  "timestamp_start": "2026-03-31T10:00:00Z",
-  "timestamp_end":   "2026-03-31T10:05:30Z",
+  "timestamp": "2026-03-31T10:00:00Z",
   "tags": {"env": "prod", "cluster": "us-east-1", "service": "payments"}
 }' | jq
 ```
@@ -80,23 +93,40 @@ pcr -X POST http://localhost:8080/api/v1/events -d '{
 }' | jq
 ```
 
-### An event with alerted: true (high risk)
+### Starring an event (meta-event)
 
-Create the event first, then set the alert flag via update:
+Stars are created by POSTing to the star endpoint. This creates a meta-event
+with `parent_id` referencing the original event:
 
 ```bash
-# Create the event
-pcr -X POST http://localhost:8080/api/v1/events -d '{
-  "user_name": "eve",
-  "event_type": "deployment",
-  "description": "Emergency hotfix auth-service",
-  "long_description": "Hotfix for CVE-2026-9999. Deployed outside normal change window.",
-  "tags": {"env": "prod", "service": "auth", "priority": "p0"}
-}' | jq
+# Replace EVENT_ID with the id from one of the events above
+pcr -X POST http://localhost:8080/api/v1/events/EVENT_ID/star | jq
+```
 
-# Note the returned id, then set alerted to true (replace EVENT_ID):
-pcr -X PUT http://localhost:8080/api/v1/events/EVENT_ID -d '{
-  "alerted": true
+Run again to toggle (creates an "unstar" meta-event).
+
+### Creating an alert meta-event
+
+Alerts are meta-events with `event_type: "alert"` and a `parent_id`:
+
+```bash
+# Replace EVENT_ID with the id of the event to alert on
+pcr -X POST http://localhost:8080/api/v1/events -d '{
+  "parent_id": "EVENT_ID",
+  "user_name": "eve",
+  "event_type": "alert",
+  "description": "Hotfix deployed outside normal change window (CVE-2026-9999)"
+}' | jq
+```
+
+To clear the alert later, create a `clear-alert` meta-event:
+
+```bash
+pcr -X POST http://localhost:8080/api/v1/events -d '{
+  "parent_id": "EVENT_ID",
+  "user_name": "eve",
+  "event_type": "clear-alert",
+  "description": "CVE patched, alert no longer needed"
 }' | jq
 ```
 
@@ -120,6 +150,14 @@ Use `start_after` and `start_before` (RFC 3339 timestamps):
 pcr "http://localhost:8080/api/v1/events?start_after=2026-03-31T00:00:00Z&start_before=2026-04-01T00:00:00Z" | jq
 ```
 
+### Filter with around + window
+
+Return events within a time window centered on a point in time:
+
+```bash
+pcr "http://localhost:8080/api/v1/events?around=2026-03-31T10:00:00Z&window=15m" | jq
+```
+
 ### Filter by user
 
 ```bash
@@ -130,6 +168,12 @@ pcr "http://localhost:8080/api/v1/events?user_name=alice" | jq
 
 ```bash
 pcr "http://localhost:8080/api/v1/events?event_type=deployment" | jq
+```
+
+### Filter to top-level events only (exclude meta-events)
+
+```bash
+pcr "http://localhost:8080/api/v1/events?top_level=true" | jq
 ```
 
 ### Filter by a single tag
@@ -162,14 +206,22 @@ pcr "http://localhost:8080/api/v1/events?limit=2&offset=2" | jq
 pcr http://localhost:8080/api/v1/events/EVENT_ID | jq
 ```
 
-### Update an event (partial update with PUT)
+### Get annotations for an event
 
-Only the fields you provide are changed. All fields are optional:
+Returns the derived annotation state (starred, alerted) computed from
+meta-events:
 
 ```bash
-pcr -X PUT http://localhost:8080/api/v1/events/EVENT_ID -d '{
-  "description": "Deploy api v2.4.2 (updated)"
-}' | jq
+pcr http://localhost:8080/api/v1/events/EVENT_ID/annotations | jq
+```
+
+Expected response:
+
+```json
+{
+  "starred": true,
+  "alerted": false
+}
 ```
 
 ### Toggle star
@@ -178,22 +230,17 @@ pcr -X PUT http://localhost:8080/api/v1/events/EVENT_ID -d '{
 pcr -X POST http://localhost:8080/api/v1/events/EVENT_ID/star | jq
 ```
 
-Run again to un-star.
+Run again to un-star. Each call creates a new meta-event (star or unstar).
 
-### Set or clear an alert
-
-```bash
-# Set alert
-pcr -X PUT http://localhost:8080/api/v1/events/EVENT_ID -d '{"alerted": true}' | jq
-
-# Clear alert
-pcr -X PUT http://localhost:8080/api/v1/events/EVENT_ID -d '{"alerted": false}' | jq
-```
-
-### Delete an event
+### Create an alert meta-event
 
 ```bash
-pcr -X DELETE http://localhost:8080/api/v1/events/EVENT_ID | jq
+pcr -X POST http://localhost:8080/api/v1/events -d '{
+  "parent_id": "EVENT_ID",
+  "user_name": "ops-bot",
+  "event_type": "alert",
+  "description": "Anomalous error rate spike after this change"
+}' | jq
 ```
 
 ---
@@ -213,14 +260,15 @@ pcr -X DELETE http://localhost:8080/api/v1/events/EVENT_ID | jq
    The event list should filter to show only events with that tag.
 
 4. **Star toggle** -- Click the star icon on an event row. The star should
-   toggle on and off. Reload the page to confirm the change persisted.
+   toggle on and off. Reload the page to confirm the change persisted (a new
+   meta-event should exist).
 
-5. **Alert highlighting** -- Create an event and set `alerted: true` (see
+5. **Alert highlighting** -- Create an alert meta-event for an event (see
    section 2 above). The row for that event should have a light red background.
 
 6. **Event detail page** -- Click the timestamp of an event to navigate to its
    detail page. Verify the full event data (including `long_description`) is
-   shown.
+   shown, along with annotation state.
 
 7. **Back to dashboard** -- On the detail page, click the "Back to dashboard"
    link. Verify you are returned to the dashboard and the token is preserved
@@ -258,6 +306,22 @@ Expected: HTTP 200 with the events list.
 
 ```bash
 curl -s -H "Authorization: Bearer wrong-token" http://localhost:8080/api/v1/events | jq
+```
+
+Expected: HTTP 401 Unauthorized.
+
+### Annotations endpoint requires auth
+
+```bash
+curl -s http://localhost:8080/api/v1/events/EVENT_ID/annotations | jq
+```
+
+Expected: HTTP 401 Unauthorized.
+
+### Star endpoint requires auth
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/events/EVENT_ID/star | jq
 ```
 
 Expected: HTTP 401 Unauthorized.

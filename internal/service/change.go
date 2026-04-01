@@ -10,38 +10,44 @@ import (
 	"github.com/sarah/go-prod-change-registry/internal/store"
 )
 
-// Validation errors returned by ChangeService methods.
 var (
-	ErrUserNameRequired = errors.New("user_name is required")
-	ErrEventNotFound    = errors.New("event not found")
+	ErrUserNameRequired  = errors.New("user_name is required")
+	ErrEventTypeRequired = errors.New("event_type is required")
+	ErrEventNotFound     = errors.New("event not found")
+	ErrParentNotFound    = errors.New("parent event not found")
 )
 
-// ChangeService implements business logic for production change events.
 type ChangeService struct {
 	store store.ChangeStore
 }
 
-// NewChangeService returns a new ChangeService backed by the given store.
 func NewChangeService(store store.ChangeStore) *ChangeService {
 	return &ChangeService{store: store}
 }
 
-// Create validates the request, populates defaults, and persists a new change event.
 func (s *ChangeService) Create(ctx context.Context, req *model.CreateChangeRequest) (*model.ChangeEvent, error) {
 	if req.UserName == "" {
 		return nil, ErrUserNameRequired
 	}
-
-	now := time.Now().UTC()
-
-	id, err := uuid.NewV7()
-	if err != nil {
-		return nil, err
+	if req.EventType == "" {
+		return nil, ErrEventTypeRequired
 	}
 
-	tsStart := now
-	if req.TimestampStart != nil {
-		tsStart = *req.TimestampStart
+	// If this is a meta-event, verify the parent exists.
+	if req.ParentID != "" {
+		parent, err := s.store.GetByID(ctx, req.ParentID)
+		if err != nil {
+			return nil, err
+		}
+		if parent == nil {
+			return nil, ErrParentNotFound
+		}
+	}
+
+	now := time.Now().UTC()
+	ts := now
+	if req.Timestamp != nil {
+		ts = *req.Timestamp
 	}
 
 	tags := req.Tags
@@ -50,22 +56,20 @@ func (s *ChangeService) Create(ctx context.Context, req *model.CreateChangeReque
 	}
 
 	event := &model.ChangeEvent{
-		ID:              id.String(),
+		ID:              uuid.Must(uuid.NewV7()).String(),
+		ParentID:        req.ParentID,
 		UserName:        req.UserName,
-		TimestampStart:  tsStart,
-		TimestampEnd:    req.TimestampEnd,
+		Timestamp:       ts,
 		EventType:       req.EventType,
 		Description:     req.Description,
 		LongDescription: req.LongDescription,
 		Tags:            tags,
 		CreatedAt:       now,
-		UpdatedAt:       now,
 	}
 
 	return s.store.Create(ctx, event)
 }
 
-// GetByID retrieves a single change event by its ID.
 func (s *ChangeService) GetByID(ctx context.Context, id string) (*model.ChangeEvent, error) {
 	event, err := s.store.GetByID(ctx, id)
 	if err != nil {
@@ -77,63 +81,54 @@ func (s *ChangeService) GetByID(ctx context.Context, id string) (*model.ChangeEv
 	return event, nil
 }
 
-// Update applies a partial update to an existing change event.
-func (s *ChangeService) Update(ctx context.Context, id string, req *model.UpdateChangeRequest) (*model.ChangeEvent, error) {
-	existing, err := s.store.GetByID(ctx, id)
+func (s *ChangeService) List(ctx context.Context, params model.ListParams) (*model.ListResult, error) {
+	params.Limit = params.EffectiveLimit()
+	return s.store.List(ctx, params)
+}
+
+func (s *ChangeService) GetAnnotations(ctx context.Context, eventID string) (*model.EventAnnotations, error) {
+	return s.store.GetAnnotations(ctx, eventID)
+}
+
+func (s *ChangeService) GetAnnotationsBatch(ctx context.Context, eventIDs []string) (map[string]*model.EventAnnotations, error) {
+	return s.store.GetAnnotationsBatch(ctx, eventIDs)
+}
+
+// ToggleStar creates a star or unstar meta-event for the given event.
+func (s *ChangeService) ToggleStar(ctx context.Context, eventID, userName string) (*model.ChangeEvent, error) {
+	// Verify parent exists.
+	parent, err := s.store.GetByID(ctx, eventID)
 	if err != nil {
 		return nil, err
 	}
-	if existing == nil {
+	if parent == nil {
 		return nil, ErrEventNotFound
 	}
 
-	if req.UserName != nil {
-		existing.UserName = *req.UserName
-	}
-	if req.EventType != nil {
-		existing.EventType = *req.EventType
-	}
-	if req.Description != nil {
-		existing.Description = *req.Description
-	}
-	if req.LongDescription != nil {
-		existing.LongDescription = *req.LongDescription
-	}
-	if req.TimestampStart != nil {
-		existing.TimestampStart = *req.TimestampStart
-	}
-	if req.TimestampEnd != nil {
-		existing.TimestampEnd = req.TimestampEnd
-	}
-	if req.Tags != nil {
-		existing.Tags = *req.Tags
-	}
-	if req.Starred != nil {
-		existing.Starred = *req.Starred
-	}
-	if req.Alerted != nil {
-		existing.Alerted = *req.Alerted
+	// Check current annotation state.
+	annotations, err := s.store.GetAnnotations(ctx, eventID)
+	if err != nil {
+		return nil, err
 	}
 
-	existing.UpdatedAt = time.Now().UTC()
-
-	return s.store.Update(ctx, existing)
-}
-
-// Delete removes a change event by its ID.
-func (s *ChangeService) Delete(ctx context.Context, id string) error {
-	return s.store.Delete(ctx, id)
-}
-
-// List returns a paginated list of change events. Limit is clamped to [1, 200]
-// and defaults to 50 when zero.
-func (s *ChangeService) List(ctx context.Context, params model.ListParams) (*model.ListResult, error) {
-	if params.Limit <= 0 {
-		params.Limit = model.DefaultLimit
-	}
-	if params.Limit > 200 {
-		params.Limit = 200
+	eventType := model.EventTypeStar
+	description := "starred"
+	if annotations != nil && annotations.Starred {
+		eventType = model.EventTypeUnstar
+		description = "unstarred"
 	}
 
-	return s.store.List(ctx, params)
+	now := time.Now().UTC()
+	metaEvent := &model.ChangeEvent{
+		ID:          uuid.Must(uuid.NewV7()).String(),
+		ParentID:    eventID,
+		UserName:    userName,
+		Timestamp:   now,
+		EventType:   eventType,
+		Description: description,
+		Tags:        make(map[string]string),
+		CreatedAt:   now,
+	}
+
+	return s.store.Create(ctx, metaEvent)
 }

@@ -32,10 +32,17 @@ When suggesting a code option, you must VERIFY the existence of every API or too
 
 ## Architecture
 
+### Append-only event model
+- Events are **immutable** once created -- there are no Update or Delete operations
+- Each event has a single `timestamp` field (not start/end)
+- Status changes (star, alert) are modeled as **meta-events** with a `parent_id` referencing the original event
+- Meta-event types: `star`, `unstar`, `alert`, `clear-alert`
+- Deployment duration is modeled with lifecycle tags (e.g. `deploy_id`, `phase:start`/`phase:end`)
+
 ### Package layout
 - `cmd/server/` — Entry point, dependency wiring, graceful shutdown
 - `internal/config/` — Env var config (PCR_ prefix)
-- `internal/model/` — ChangeEvent, ListParams, request/response types
+- `internal/model/` — ChangeEvent, ListParams, CreateChangeRequest, EventAnnotations
 - `internal/store/` — ChangeStore interface
 - `internal/store/sqlite/` — SQLite implementation (WAL mode, busy_timeout, slow query logging)
 - `internal/service/` — Business logic, validation, defaults
@@ -45,14 +52,32 @@ When suggesting a code option, you must VERIFY the existence of every API or too
 - `migrations/` — Embedded SQL migrations (golang-migrate)
 - `web/` — Embedded HTML templates and static CSS
 
+### ChangeStore interface
+- `Create(ctx, ChangeEvent) error`
+- `GetByID(ctx, id) (ChangeEvent, error)`
+- `List(ctx, ListParams) (ListResult, error)`
+- `GetAnnotations(ctx, id) (EventAnnotations, error)`
+- `GetAnnotationsBatch(ctx, ids) (map[string]EventAnnotations, error)`
+- `Close() error`
+
+### API routes (append-only: create and read only)
+- `GET /api/v1/health` — Health check
+- `GET /api/v1/events` — List events (filters: start_after, start_before, around+window, user_name, event_type, top_level, tag)
+- `POST /api/v1/events` — Create event (or meta-event with parent_id)
+- `GET /api/v1/events/{id}` — Get single event
+- `GET /api/v1/events/{id}/annotations` — Get derived annotation state (starred, alerted)
+- `POST /api/v1/events/{id}/star` — Toggle star (creates star/unstar meta-event)
+
 ### Key design decisions
+- Append-only: no PUT or DELETE endpoints; all state changes are new events
 - Repository pattern: `store.ChangeStore` interface allows swapping SQLite for PostgreSQL
 - SQLite with WAL mode + busy_timeout for concurrent access
 - Slow query threshold logging on all store operations
 - Zero trust auth: all routes require token by default (PCR_REQUIRE_AUTH_READS)
 - Token passed via Bearer header or ?token= query param for browser access
 - Templates parsed separately per page to avoid Go template name collisions
-- Star is toggleable from dashboard (POST form), alert is API-only
+- Star is toggleable from dashboard (POST form), alert is API-only (create alert meta-event)
+- Annotations are derived at query time from the chain of meta-events for a parent
 - Static files served outside auth middleware
 
 ### Dependencies (4 external)
