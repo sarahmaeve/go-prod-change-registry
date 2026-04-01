@@ -1,0 +1,131 @@
+{{define "content"}}
+<section class="filters">
+    <div class="time-range-bar">
+        <span class="time-range-label">Time range:</span>
+        <a href="/?range=5m{{if .Token}}&token={{.Token}}{{end}}" class="time-range-btn{{if eq .Filters.Range "5m"}} active{{end}}">Last 5 min</a>
+        <a href="/?range=30m{{if .Token}}&token={{.Token}}{{end}}" class="time-range-btn{{if eq .Filters.Range "30m"}} active{{end}}">Last 30 min</a>
+        <a href="/?range=1h{{if .Token}}&token={{.Token}}{{end}}" class="time-range-btn{{if eq .Filters.Range "1h"}} active{{end}}">Last hour</a>
+        <a href="/?range=24h{{if .Token}}&token={{.Token}}{{end}}" class="time-range-btn{{if eq .Filters.Range "24h"}} active{{end}}">Last 24 hours</a>
+        <a href="/?range=custom{{if .Token}}&token={{.Token}}{{end}}" class="time-range-btn{{if eq .Filters.Range "custom"}} active{{end}}" id="custom-toggle">Custom</a>
+        <span class="time-range-sep"></span>
+        <a href="/?alerted=true{{if .Token}}&token={{.Token}}{{end}}" class="time-range-btn btn-alerts{{if .Filters.Alerted}} active{{end}}">Alerts</a>
+        {{if or .Filters.Range .Filters.Alerted}}<a href="/?{{if .Token}}token={{.Token}}{{end}}" class="btn-clear">Clear</a>{{end}}
+    </div>
+
+    <form method="GET" action="/" class="filter-form" id="custom-range"{{if ne .Filters.Range "custom"}} style="display:none"{{end}}>
+        <input type="hidden" name="range" value="custom">
+        {{if .Token}}<input type="hidden" name="token" value="{{.Token}}">{{end}}
+        <div class="filter-group">
+            <label for="start_after">From</label>
+            <input type="datetime-local" id="start_after" name="start_after" value="{{.Filters.StartAfter}}">
+        </div>
+        <div class="filter-group">
+            <label for="start_before">To</label>
+            <input type="datetime-local" id="start_before" name="start_before" value="{{.Filters.StartBefore}}">
+        </div>
+        <div class="filter-group">
+            <label for="type">Event Type</label>
+            <input type="text" id="type" name="type" placeholder="e.g. deployment" value="{{.Filters.EventType}}">
+        </div>
+        <div class="filter-group">
+            <label for="user">User</label>
+            <input type="text" id="user" name="user" placeholder="e.g. alice" value="{{.Filters.UserName}}">
+        </div>
+        <div class="filter-actions">
+            <button type="submit">Apply</button>
+        </div>
+    </form>
+
+    {{if and (ne .Filters.Range "custom") (ne .Filters.Range "")}}
+    <form method="GET" action="/" class="filter-form filter-form-inline">
+        <input type="hidden" name="range" value="{{.Filters.Range}}">
+        {{if .Token}}<input type="hidden" name="token" value="{{.Token}}">{{end}}
+        <div class="filter-group">
+            <label for="type2">Event Type</label>
+            <input type="text" id="type2" name="type" placeholder="e.g. deployment" value="{{.Filters.EventType}}">
+        </div>
+        <div class="filter-group">
+            <label for="user2">User</label>
+            <input type="text" id="user2" name="user" placeholder="e.g. alice" value="{{.Filters.UserName}}">
+        </div>
+        <div class="filter-actions">
+            <button type="submit">Filter</button>
+        </div>
+    </form>
+    {{end}}
+</section>
+
+<script>
+document.getElementById('custom-toggle').addEventListener('click', function(e) {
+    var form = document.getElementById('custom-range');
+    if (form.style.display === 'none') {
+        e.preventDefault();
+        form.style.display = '';
+    }
+});
+</script>
+
+{{if .Filters.Tags}}
+<div class="active-filters">
+    <span>Filtering by tags:</span>
+    {{range .Filters.Tags}}
+    <span class="badge badge-active">{{.}} <a href="/?{{if $.Token}}token={{$.Token}}{{end}}" class="badge-remove">&times;</a></span>
+    {{end}}
+</div>
+{{end}}
+
+{{if .Events}}
+<div class="table-wrapper">
+    <table class="events-table">
+        <thead>
+            <tr>
+                <th class="col-status"></th>
+                <th>Time</th>
+                <th>Duration</th>
+                <th>User</th>
+                <th>Type</th>
+                <th>Description</th>
+                <th>Tags</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Events}}
+            <tr class="type-{{.EventType}}{{if .Alerted}} row-alerted{{end}}">
+                <td class="col-status">
+                    <form method="POST" action="/events/{{.ID}}/star{{if $.Token}}?token={{$.Token}}{{end}}" class="star-form">
+                        <button type="submit" class="star-btn{{if .Starred}} starred{{end}}" title="{{if .Starred}}Unstar{{else}}Star{{end}}">
+                            {{if .Starred}}&#9733;{{else}}&#9734;{{end}}
+                        </button>
+                    </form>
+                    {{if .Alerted}}<span class="alert-icon" title="Alert">&#9888;</span>{{end}}
+                </td>
+                <td><a href="/events/{{.ID}}{{if $.Token}}?token={{$.Token}}{{end}}">{{formatTime .TimestampStart}}</a></td>
+                <td>{{formatDuration .TimestampStart .TimestampEnd}}</td>
+                <td>{{.UserName}}</td>
+                <td>{{.EventType}}</td>
+                <td>{{.Description}}</td>
+                <td>
+                    {{$tags := .Tags}}
+                    {{range $k, $v := $tags}}
+                    <a href="{{tagFilterURL $k $v $.Token}}" class="badge badge-link">{{$k}}={{$v}}</a>
+                    {{end}}
+                </td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+</div>
+
+<div class="pagination">
+    {{if .HasPrev}}
+    <a href="{{.PrevURL}}" class="pagination-link">&laquo; Previous</a>
+    {{end}}
+    <span class="pagination-info">Showing {{.OffsetStart}}–{{.OffsetEnd}} of {{.TotalCount}}</span>
+    {{if .HasNext}}
+    <a href="{{.NextURL}}" class="pagination-link">Next &raquo;</a>
+    {{end}}
+</div>
+{{else}}
+<p class="empty-state">No events found.</p>
+{{end}}
+{{end}}

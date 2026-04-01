@@ -8,6 +8,8 @@
 *.so
 *.dylib
 
+bin/
+
 # Test binary, built with `go test -c`
 *.test
 
@@ -23,6 +25,11 @@ profile.cov
 # Go workspace file
 go.work
 go.work.sum
+
+# SQLite database files
+*.db
+*.db-wal
+*.db-shm
 
 # env file
 .env

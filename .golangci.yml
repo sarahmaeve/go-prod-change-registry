@@ -1,0 +1,21 @@
+run:
+  timeout: 2m
+  go: "1.25"
+
+linters:
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - unused
+    - gosimple
+    - ineffassign
+    - gocritic
+    - gofmt
+
+issues:
+  exclude-dirs:
+    - vendor
+  exclude-files:
+    - ".*_gen\\.go$"
+    - ".*\\.pb\\.go$"
