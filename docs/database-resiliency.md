@@ -11,8 +11,7 @@ Schema is managed exclusively by `golang-migrate/migrate/v4`. The SQLite store (
 | Migration | Purpose |
 |---|---|
 | `001_create_change_events.up.sql` | Creates `change_events` and `change_event_tags` tables with indexes |
-| `002_add_starred_alerted.up.sql` | Adds `starred` and `alerted` INTEGER columns to `change_events` |
-| `003_add_external_id.up.sql` | Adds `external_id` TEXT column with a partial unique index (`WHERE external_id IS NOT NULL`) for idempotency |
+| `002_add_external_id.up.sql` | Adds `external_id` TEXT column with a partial unique index (`WHERE external_id IS NOT NULL`) for idempotency |
 
 ### Why migrations are the sole schema owner
 
@@ -59,7 +58,7 @@ INFO database migrations applied successfully
 
 ### 3. Partially migrated database
 
-If only migration 001 has been applied (e.g., from an older version of the binary), `m.Up()` applies migration 002 to add the `starred` and `alerted` columns. Existing data is preserved.
+If only migration 001 has been applied (e.g., from an older version of the binary), `m.Up()` applies migration 002 to add the `external_id` column and its partial unique index. Existing data is preserved.
 
 ### 4. Dirty database (previous migration failed)
 
@@ -114,7 +113,7 @@ The `busy_timeout` pragma (default 5 seconds, configurable via `PCR_DB_BUSY_TIME
 
 ### Slow query logging
 
-All store operations (Create, GetByID, Update, Delete, List) are instrumented with latency logging:
+All store operations (Create, GetByID, List, GetAnnotations, GetAnnotationsBatch) are instrumented with latency logging:
 
 - **Debug level:** Operations completing under the threshold (default 100ms)
 - **Warn level:** Operations exceeding the threshold
@@ -131,8 +130,8 @@ WARN slow store operation op=Create duration=247ms
 The SELECT statements in the store use explicit column lists (not `SELECT *`). The column order in all queries must match the `scanEventFields` function's `Scan` call. The verified order is:
 
 ```
-id, user_name, timestamp_start, timestamp_end, event_type, description,
-long_description, starred, alerted, created_at, updated_at
+id, external_id, parent_id, user_name, timestamp, event_type, description,
+long_description, created_at
 ```
 
 This is consistent across:
@@ -140,7 +139,6 @@ This is consistent across:
 - `List` SELECT
 - `scanEventFields` Scan destinations
 - `Create` INSERT column list
-- `Update` SET clause
 
 Note: SQLite `ALTER TABLE ADD COLUMN` appends columns at the end of the physical table. Since we use named columns in SELECT (not `SELECT *`), physical order does not matter.
 
@@ -148,7 +146,7 @@ Note: SQLite `ALTER TABLE ADD COLUMN` appends columns at the end of the physical
 
 Integration tests (`internal/store/sqlite/sqlite_test.go`) use a `testSchemaSQL` constant that mirrors the combined output of migrations 001 + 002. This must be kept in sync with migrations manually. If a new migration is added, update `testSchemaSQL` to match.
 
-The test schema includes `starred` and `alerted` in the initial CREATE TABLE (rather than ALTER TABLE) since tests create fresh databases with the full schema in one step.
+The test schema includes `parent_id`, `external_id`, and a single `timestamp` column in the initial CREATE TABLE (rather than using ALTER TABLE) since tests create fresh databases with the full schema in one step.
 
 ## Checklist for Adding New Migrations
 
@@ -156,13 +154,13 @@ The test schema includes `starred` and `alerted` in the initial CREATE TABLE (ra
 2. Use `IF NOT EXISTS` / `IF EXISTS` where SQLite supports it (CREATE TABLE, CREATE INDEX, DROP TABLE, DROP INDEX)
 3. For `ALTER TABLE ADD COLUMN`: SQLite does not support `IF NOT EXISTS` -- the migration runner handles duplicate column errors gracefully, but avoid relying on this
 4. Update `testSchemaSQL` in `internal/store/sqlite/sqlite_test.go` to reflect the new schema
-5. Update `scanEventFields` and all SELECT/INSERT/UPDATE queries if columns are added
+5. Update `scanEventFields` and all SELECT/INSERT queries if columns are added
 6. Run the full test suite: `go test -tags=integration ./... -race`
 7. Test against a fresh database and an existing database with prior migrations applied
 
-### Note on migration 003 (external_id)
+### Note on migration 002 (external_id)
 
-Migration 003 adds a nullable `external_id` TEXT column to `change_events` and creates a partial unique index:
+Migration 002 adds a nullable `external_id` TEXT column to `change_events` and creates a partial unique index:
 
 ```sql
 CREATE UNIQUE INDEX IF NOT EXISTS idx_change_events_external_id

@@ -47,22 +47,22 @@ When suggesting a code option, you must VERIFY the existence of every API or too
 - `internal/store/sqlite/` — SQLite implementation (WAL mode, busy_timeout, slow query logging)
 - `internal/service/` — Business logic, validation, defaults
 - `internal/handler/` — API handlers (REST/JSON) and dashboard handlers (HTML)
-- `internal/middleware/` — Auth (Bearer + query param token), request logging, request ID
+- `internal/middleware/` — Auth (Bearer token, session cookie, query param token), request logging, request ID
 - `internal/router/` — Chi router wiring
 - `migrations/` — Embedded SQL migrations (golang-migrate)
 - `web/` — Embedded HTML templates and static CSS
 
 ### ChangeStore interface
-- `Create(ctx, ChangeEvent) error`
-- `GetByID(ctx, id) (ChangeEvent, error)`
-- `List(ctx, ListParams) (ListResult, error)`
-- `GetAnnotations(ctx, id) (EventAnnotations, error)`
-- `GetAnnotationsBatch(ctx, ids) (map[string]EventAnnotations, error)`
+- `Create(ctx, *ChangeEvent) (*ChangeEvent, error)`
+- `GetByID(ctx, id) (*ChangeEvent, error)`
+- `List(ctx, ListParams) (*ListResult, error)`
+- `GetAnnotations(ctx, eventID) (*EventAnnotations, error)`
+- `GetAnnotationsBatch(ctx, eventIDs) (map[string]*EventAnnotations, error)`
 - `Close() error`
 
 ### API routes (append-only: create and read only)
 - `GET /api/v1/health` — Health check
-- `GET /api/v1/events` — List events (filters: start_after, start_before, around+window, user_name, event_type, top_level, tag)
+- `GET /api/v1/events` — List events (filters: start_after, start_before, around+window, user, type, alerted, top_level, tag)
 - `POST /api/v1/events` — Create event (or meta-event with parent_id)
 - `GET /api/v1/events/{id}` — Get single event
 - `GET /api/v1/events/{id}/annotations` — Get derived annotation state (starred, alerted)
@@ -74,7 +74,7 @@ When suggesting a code option, you must VERIFY the existence of every API or too
 - SQLite with WAL mode + busy_timeout for concurrent access
 - Slow query threshold logging on all store operations
 - Zero trust auth: all routes require token by default (PCR_REQUIRE_AUTH_READS)
-- Token passed via Bearer header or ?token= query param for browser access
+- Token passed via Bearer header for API clients. Dashboard uses cookie-based sessions (set via /login endpoint). Query param ?token= supported as fallback.
 - Templates parsed separately per page to avoid Go template name collisions
 - Star is toggleable from dashboard (POST form), alert is API-only (create alert meta-event)
 - Annotations are derived at query time from the chain of meta-events for a parent

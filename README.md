@@ -53,6 +53,15 @@ The API is append-only. There are no PUT, PATCH, or DELETE endpoints. Events are
 | `GET` | `/api/v1/events/{id}/annotations` | Get derived annotation state (starred, alerted) |
 | `POST` | `/api/v1/events/{id}/star` | Toggle star (creates a star or unstar meta-event) |
 
+### Dashboard routes
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/` | Dashboard (requires session cookie or token) |
+| `GET` | `/events/{id}` | Event detail page |
+| `POST` | `/events/{id}/star` | Toggle star (redirects back) |
+| `GET` | `/login` | Set session cookie and redirect to dashboard |
+
 ### Query parameters for `GET /api/v1/events`
 
 | Parameter | Type | Description |
@@ -63,8 +72,9 @@ The API is append-only. There are no PUT, PATCH, or DELETE endpoints. Events are
 | `window` | Go duration (e.g. `30m`) | Half-width of the time window around `around` |
 | `user` | string | Filter by user name |
 | `type` | string | Filter by event type (`deployment`, `feature-flag`, `k8s-change`, ...) |
-| `tag` | string | Filter by tag (`key=value`) |
+| `tag` | string | Filter by tag (`key:value`) |
 | `top_level` | bool | If `true`, exclude meta-events (only events without a `parent_id`) |
+| `alerted` | bool | If true, return only events with an active alert annotation |
 | `limit` | int | Max results, 1-200 (default 50) |
 | `offset` | int | Pagination offset |
 
@@ -206,7 +216,7 @@ pcr -X POST http://localhost:8080/api/v1/events -d '{
 Query by tag to see the full lifecycle:
 
 ```bash
-pcr "http://localhost:8080/api/v1/events?tag=deploy_id%3Dabc123"
+pcr "http://localhost:8080/api/v1/events?tag=deploy_id:abc123"
 ```
 
 ## Idempotency
@@ -261,7 +271,7 @@ Both requests return the same event (same `id`, same `created_at`). The second r
 
 The built-in HTML dashboard is served at `/`. Authenticate by visiting `/login?token=my-secret-token` — this sets a session cookie and redirects to the dashboard. The cookie is valid for 24 hours. It provides:
 
-- Time range buttons to filter events by predefined windows (last hour, 6h, 24h, 7d, etc.)
+- Time range buttons to filter events by predefined windows (last 5 minutes, 30 minutes, 1 hour, and 24 hours)
 - Clickable tags that filter the event list to matching events
 - A star toggle on each event (creates star/unstar meta-events behind the scenes)
 - Visual alert highlighting for events that have active alert meta-events

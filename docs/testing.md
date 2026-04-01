@@ -164,13 +164,13 @@ pcr "http://localhost:8080/api/v1/events?around=2026-03-31T10:00:00Z&window=15m"
 ### Filter by user
 
 ```bash
-pcr "http://localhost:8080/api/v1/events?user_name=alice" | jq
+pcr "http://localhost:8080/api/v1/events?user=alice" | jq
 ```
 
 ### Filter by event type
 
 ```bash
-pcr "http://localhost:8080/api/v1/events?event_type=deployment" | jq
+pcr "http://localhost:8080/api/v1/events?type=deployment" | jq
 ```
 
 ### Filter to top-level events only (exclude meta-events)
