@@ -91,14 +91,6 @@ func TestAuth(t *testing.T) {
 			expectedStatus:  http.StatusUnauthorized,
 		},
 		{
-			name:            "health endpoint is always exempt from auth",
-			method:          http.MethodGet,
-			path:            "/api/v1/health",
-			authHeader:      "",
-			requireForReads: true,
-			expectedStatus:  http.StatusOK,
-		},
-		{
 			name:            "valid query param token allows request through",
 			method:          http.MethodGet,
 			path:            "/api/v1/events",

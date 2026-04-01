@@ -276,7 +276,71 @@ pcr -X POST http://localhost:8080/api/v1/events -d '{
 
 ---
 
-## 5. Testing auth enforcement
+## 5. Testing idempotency
+
+The `external_id` field acts as an idempotency key. These tests verify correct
+behavior for creates and retries.
+
+### Create event with external_id (expect 201)
+
+```bash
+pcr -w "\nHTTP status: %{http_code}\n" -X POST http://localhost:8080/api/v1/events -d '{
+  "external_id": "test-idempotency-001",
+  "user_name": "alice",
+  "event_type": "deployment",
+  "description": "Idempotency test event",
+  "tags": {"env": "staging"}
+}' | jq
+```
+
+Expected: HTTP 201 Created. Note the returned `id`.
+
+### Retry same request (expect 200, same event returned)
+
+```bash
+pcr -w "\nHTTP status: %{http_code}\n" -X POST http://localhost:8080/api/v1/events -d '{
+  "external_id": "test-idempotency-001",
+  "user_name": "alice",
+  "event_type": "deployment",
+  "description": "Idempotency test event",
+  "tags": {"env": "staging"}
+}' | jq
+```
+
+Expected: HTTP 200 OK. The returned event has the same `id` and `created_at` as
+the first request. No duplicate was created.
+
+### Create with a different external_id (expect 201, new event)
+
+```bash
+pcr -w "\nHTTP status: %{http_code}\n" -X POST http://localhost:8080/api/v1/events -d '{
+  "external_id": "test-idempotency-002",
+  "user_name": "alice",
+  "event_type": "deployment",
+  "description": "A different deployment",
+  "tags": {"env": "staging"}
+}' | jq
+```
+
+Expected: HTTP 201 Created. A new event with a different `id`.
+
+### Create without external_id (expect 201, no conflict)
+
+```bash
+pcr -w "\nHTTP status: %{http_code}\n" -X POST http://localhost:8080/api/v1/events -d '{
+  "user_name": "alice",
+  "event_type": "deployment",
+  "description": "No external_id, always creates",
+  "tags": {"env": "staging"}
+}' | jq
+```
+
+Expected: HTTP 201 Created. Events without `external_id` never conflict with
+each other or with events that have one.
+
+---
+
+## 6. Testing auth enforcement
 
 ### Request without a token returns 401
 
@@ -288,11 +352,29 @@ Expected: HTTP 401 Unauthorized.
 
 ### Health endpoint works without auth
 
+The health check does not require authentication and verifies database connectivity.
+
 ```bash
+# Should return 200 with {"status": "ok"} when the database is reachable
 curl -s http://localhost:8080/api/v1/health | jq
 ```
 
-Expected: HTTP 200 with a health response body.
+Expected: `{"status": "ok"}` with HTTP 200.
+
+To test the unhealthy case, stop the server, corrupt or remove the database file, and restart:
+
+```bash
+# Move the DB away temporarily
+mv registry.db registry.db.bak
+# Restart the server (it will create a new empty DB, so this tests migration + health)
+# To truly test DB failure, you would need to make the file unreadable:
+chmod 000 registry.db
+curl -s http://localhost:8080/api/v1/health | jq
+# Expected: {"status": "unhealthy", "reason": "database unreachable"} with HTTP 503
+# Restore:
+chmod 644 registry.db
+mv registry.db.bak registry.db
+```
 
 ### Query parameter token works
 
@@ -328,7 +410,7 @@ Expected: HTTP 401 Unauthorized.
 
 ---
 
-## 6. Running automated tests
+## 7. Running automated tests
 
 ### Unit tests
 

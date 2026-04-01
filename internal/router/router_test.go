@@ -65,6 +65,10 @@ func (m *mockStore) GetAnnotationsBatch(ctx context.Context, eventIDs []string) 
 
 func (m *mockStore) Close() error { return nil }
 
+type mockPinger struct{}
+
+func (p *mockPinger) PingContext(_ context.Context) error { return nil }
+
 const testToken = "test-secret-token"
 
 // newTestRouter creates a full router with auth middleware and mock store.
@@ -104,7 +108,7 @@ func newTestRouter(t *testing.T, requireAuthReads bool) (http.Handler, *mockStor
 	}
 
 	svc := service.NewChangeService(ms)
-	apiH := handler.NewAPIHandler(svc)
+	apiH := handler.NewAPIHandler(svc, &mockPinger{})
 	dashH := handler.NewDashboardHandler(svc, 0)
 
 	cfg := &config.Config{

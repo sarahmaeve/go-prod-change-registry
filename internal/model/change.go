@@ -20,6 +20,7 @@ const (
 // meta-events with a ParentID referencing the original event.
 type ChangeEvent struct {
 	ID              string            `json:"id"`
+	ExternalID      string            `json:"external_id,omitempty"`
 	ParentID        string            `json:"parent_id,omitempty"`
 	UserName        string            `json:"user_name"`
 	Timestamp       time.Time         `json:"timestamp"`
@@ -44,21 +45,28 @@ type ListParams struct {
 	UserName    string            `json:"user_name,omitempty"`
 	EventType   string            `json:"event_type,omitempty"`
 	TopLevel    bool              `json:"top_level,omitempty"`
+	AlertedOnly bool              `json:"alerted_only,omitempty"`
 	Tags        map[string]string `json:"tags,omitempty"`
 	Limit       int               `json:"limit"`
 	Offset      int               `json:"offset"`
 }
 
-// DefaultLimit is the default number of results returned by List.
+// DefaultLimit is the default number of results returned by the API.
 const DefaultLimit = 50
+
+// DashboardLimit is the default number of results shown in the web dashboard.
+const DashboardLimit = 40
+
+// MaxLimit is the maximum number of results allowed per query.
+const MaxLimit = 200
 
 // EffectiveLimit returns the Limit to use, clamped to [1, 200] with a default of 50.
 func (p ListParams) EffectiveLimit() int {
 	switch {
 	case p.Limit <= 0:
 		return DefaultLimit
-	case p.Limit > 200:
-		return 200
+	case p.Limit > MaxLimit:
+		return MaxLimit
 	default:
 		return p.Limit
 	}
@@ -75,6 +83,7 @@ type ListResult struct {
 // CreateChangeRequest is the API request body for creating a new change event.
 type CreateChangeRequest struct {
 	ParentID        string            `json:"parent_id,omitempty"`
+	ExternalID      string            `json:"external_id,omitempty"`
 	UserName        string            `json:"user_name"`
 	Timestamp       *time.Time        `json:"timestamp,omitempty"`
 	EventType       string            `json:"event_type"`

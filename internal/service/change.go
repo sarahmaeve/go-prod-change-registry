@@ -57,6 +57,7 @@ func (s *ChangeService) Create(ctx context.Context, req *model.CreateChangeReque
 
 	event := &model.ChangeEvent{
 		ID:              uuid.Must(uuid.NewV7()).String(),
+		ExternalID:      req.ExternalID,
 		ParentID:        req.ParentID,
 		UserName:        req.UserName,
 		Timestamp:       ts,
@@ -67,7 +68,11 @@ func (s *ChangeService) Create(ctx context.Context, req *model.CreateChangeReque
 		CreatedAt:       now,
 	}
 
-	return s.store.Create(ctx, event)
+	created, err := s.store.Create(ctx, event)
+	if errors.Is(err, store.ErrDuplicate) {
+		return created, store.ErrDuplicate
+	}
+	return created, err
 }
 
 func (s *ChangeService) GetByID(ctx context.Context, id string) (*model.ChangeEvent, error) {

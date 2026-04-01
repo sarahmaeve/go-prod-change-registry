@@ -84,9 +84,10 @@ func (s *Store) Create(ctx context.Context, event *model.ChangeEvent) (result *m
 
 	_, err = tx.ExecContext(
 		ctx,
-		`INSERT INTO change_events (id, parent_id, user_name, timestamp, event_type, description, long_description, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO change_events (id, external_id, parent_id, user_name, timestamp, event_type, description, long_description, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.ID,
+		nullableString(event.ExternalID),
 		parentID,
 		event.UserName,
 		event.Timestamp.Format(time.RFC3339),
@@ -95,6 +96,15 @@ func (s *Store) Create(ctx context.Context, event *model.ChangeEvent) (result *m
 		event.LongDescription,
 		event.CreatedAt.Format(time.RFC3339),
 	)
+	if err != nil && event.ExternalID != "" && isUniqueViolation(err) {
+		// Event with this external_id already exists — return it (idempotent).
+		tx.Rollback() //nolint:errcheck
+		existing, lookupErr := s.GetByExternalID(ctx, event.ExternalID)
+		if lookupErr != nil {
+			return nil, lookupErr
+		}
+		return existing, store.ErrDuplicate
+	}
 	if err != nil {
 		return nil, fmt.Errorf("insert event: %w", err)
 	}
@@ -118,7 +128,7 @@ func (s *Store) GetByID(ctx context.Context, id string) (result *model.ChangeEve
 
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, parent_id, user_name, timestamp, event_type, description, long_description, created_at
+		`SELECT id, external_id, parent_id, user_name, timestamp, event_type, description, long_description, created_at
 		 FROM change_events WHERE id = ?`,
 		id,
 	)
@@ -157,7 +167,7 @@ func (s *Store) List(ctx context.Context, params model.ListParams) (result *mode
 
 	// Fetch the page.
 	selectQuery := fmt.Sprintf(
-		`SELECT id, parent_id, user_name, timestamp, event_type, description, long_description, created_at
+		`SELECT id, external_id, parent_id, user_name, timestamp, event_type, description, long_description, created_at
 		 FROM change_events%s
 		 ORDER BY timestamp DESC, id ASC
 		 LIMIT ? OFFSET ?`,
@@ -352,6 +362,36 @@ func (s *Store) GetAnnotationsBatch(ctx context.Context, eventIDs []string) (res
 	return annotations, nil
 }
 
+// GetByExternalID retrieves a single change event by its external_id, including its tags.
+// Returns (nil, nil) when no event with the given external_id exists.
+func (s *Store) GetByExternalID(ctx context.Context, externalID string) (result *model.ChangeEvent, err error) {
+	start := time.Now()
+	defer func() { s.logOperation(ctx, "GetByExternalID", start, err) }()
+
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, external_id, parent_id, user_name, timestamp, event_type, description, long_description, created_at
+		 FROM change_events WHERE external_id = ?`,
+		externalID,
+	)
+
+	ev, err := scanEvent(row)
+	if err != nil {
+		return nil, err
+	}
+	if ev == nil {
+		return nil, nil
+	}
+
+	tags, err := s.loadTagsForEvents(ctx, []string{ev.ID})
+	if err != nil {
+		return nil, err
+	}
+	ev.Tags = tags[ev.ID]
+
+	return ev, nil
+}
+
 // --- helpers ---
 
 // scanner is satisfied by both *sql.Row and *sql.Rows.
@@ -359,14 +399,16 @@ type scanner interface {
 	Scan(dest ...any) error
 }
 
-// scanEventFields scans 8 columns from a change_events row into a ChangeEvent.
+// scanEventFields scans 9 columns from a change_events row into a ChangeEvent.
 func scanEventFields(sc scanner) (*model.ChangeEvent, error) {
 	var ev model.ChangeEvent
+	var externalID *string
 	var parentID *string
 	var timestamp, createdAt string
 
 	err := sc.Scan(
 		&ev.ID,
+		&externalID,
 		&parentID,
 		&ev.UserName,
 		&timestamp,
@@ -377,6 +419,11 @@ func scanEventFields(sc scanner) (*model.ChangeEvent, error) {
 	)
 	if err != nil {
 		return nil, err
+	}
+
+	// Convert nullable external_id to string (empty when NULL).
+	if externalID != nil {
+		ev.ExternalID = *externalID
 	}
 
 	// Convert nullable parent_id to string (empty when NULL).
@@ -517,6 +564,23 @@ func buildWhereClause(params model.ListParams) (string, []any) {
 		clauses = append(clauses, "parent_id IS NULL")
 	}
 
+	if params.AlertedOnly {
+		// Find events whose most recent alert/clear-alert meta-event is "alert".
+		// This subquery gets parent IDs where the latest annotation is an active alert.
+		clauses = append(clauses, `id IN (
+			SELECT parent_id FROM change_events AS meta
+			WHERE meta.event_type IN ('alert', 'clear-alert')
+			AND meta.parent_id IS NOT NULL
+			AND NOT EXISTS (
+				SELECT 1 FROM change_events AS newer
+				WHERE newer.parent_id = meta.parent_id
+				AND newer.event_type IN ('alert', 'clear-alert')
+				AND (newer.created_at > meta.created_at OR (newer.created_at = meta.created_at AND newer.id > meta.id))
+			)
+			AND meta.event_type = 'alert'
+		)`)
+	}
+
 	if len(params.Tags) > 0 {
 		tagClauses := make([]string, 0, len(params.Tags))
 		for k, v := range params.Tags {
@@ -536,4 +600,18 @@ func buildWhereClause(params model.ListParams) (string, []any) {
 	}
 
 	return " WHERE " + strings.Join(clauses, " AND "), args
+}
+
+// nullableString returns a *string pointer for use with SQL parameters.
+// It returns nil when s is empty, so the column is stored as NULL.
+func nullableString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// isUniqueViolation reports whether err is a SQLite UNIQUE constraint failure.
+func isUniqueViolation(err error) bool {
+	return strings.Contains(err.Error(), "UNIQUE constraint failed")
 }

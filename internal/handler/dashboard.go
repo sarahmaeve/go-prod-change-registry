@@ -137,32 +137,36 @@ func (h *DashboardHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	params.TopLevel = true
 
 	// Handle time range: quick-select presets or custom datetime range.
-	if rangeVal := r.URL.Query().Get("range"); rangeVal != "" {
-		filters.Range = rangeVal
+	// Default to last 24 hours when no range is specified.
+	rangeVal := r.URL.Query().Get("range")
+	if rangeVal == "" {
+		rangeVal = "24h"
+	}
+	filters.Range = rangeVal
 
-		if d, ok := quickRanges[rangeVal]; ok {
-			startAfter := time.Now().UTC().Add(-d)
-			params.StartAfter = &startAfter
-		} else if rangeVal == "custom" {
-			if v := r.URL.Query().Get("start_after"); v != "" {
-				filters.StartAfter = v
-				t, err := time.Parse("2006-01-02T15:04", v)
-				if err == nil {
-					params.StartAfter = &t
-				}
+	if d, ok := quickRanges[rangeVal]; ok {
+		startAfter := time.Now().UTC().Add(-d)
+		params.StartAfter = &startAfter
+	} else if rangeVal == "custom" {
+		if v := r.URL.Query().Get("start_after"); v != "" {
+			filters.StartAfter = v
+			t, err := time.Parse("2006-01-02T15:04", v)
+			if err == nil {
+				params.StartAfter = &t
 			}
-			if v := r.URL.Query().Get("start_before"); v != "" {
-				filters.StartBefore = v
-				t, err := time.Parse("2006-01-02T15:04", v)
-				if err == nil {
-					params.StartBefore = &t
-				}
+		}
+		if v := r.URL.Query().Get("start_before"); v != "" {
+			filters.StartBefore = v
+			t, err := time.Parse("2006-01-02T15:04", v)
+			if err == nil {
+				params.StartBefore = &t
 			}
 		}
 	}
 
 	if v := r.URL.Query().Get("alerted"); v == "true" {
 		filters.Alerted = true
+		params.AlertedOnly = true
 	}
 
 	if v := r.URL.Query().Get("type"); v != "" {
@@ -189,7 +193,7 @@ func (h *DashboardHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	limit := model.DefaultLimit
+	limit := model.DashboardLimit
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			limit = n

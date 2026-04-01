@@ -24,16 +24,16 @@ func New(apiHandler *handler.APIHandler, dashHandler *handler.DashboardHandler, 
 	r.Use(chimiddleware.RealIP)
 	r.Use(chimiddleware.Timeout(30 * time.Second))
 
-	// Static files are served without authentication.
+	// Static files and health check are served without authentication.
 	staticFS := http.FileServerFS(web.StaticFS)
 	r.Handle("/static/*", staticFS)
+	r.Get("/api/v1/health", apiHandler.HealthCheck)
 
 	// All remaining routes require authentication.
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Auth(cfg.APITokens, cfg.RequireAuthReads))
 
 		// API routes (append-only: create and read only, no update/delete).
-		r.Get("/api/v1/health", apiHandler.HealthCheck)
 		r.Get("/api/v1/events", apiHandler.ListEvents)
 		r.Post("/api/v1/events", apiHandler.CreateEvent)
 		r.Get("/api/v1/events/{id}", apiHandler.GetEvent)

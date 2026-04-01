@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -12,22 +13,44 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/sarah/go-prod-change-registry/internal/model"
 	"github.com/sarah/go-prod-change-registry/internal/service"
+	"github.com/sarah/go-prod-change-registry/internal/store"
 )
 
+// Pinger tests database connectivity.
+type Pinger interface {
+	PingContext(ctx context.Context) error
+}
+
+// APIHandler serves the REST/JSON API.
 type APIHandler struct {
 	svc *service.ChangeService
+	db  Pinger
 }
 
-func NewAPIHandler(svc *service.ChangeService) *APIHandler {
-	return &APIHandler{svc: svc}
+// NewAPIHandler creates an APIHandler. The db parameter is used for health checks.
+func NewAPIHandler(svc *service.ChangeService, db Pinger) *APIHandler {
+	return &APIHandler{svc: svc, db: db}
 }
 
+// HealthCheck verifies that the service is running and the database is reachable.
 func (h *APIHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {
+	if err := h.db.PingContext(r.Context()); err != nil {
+		slog.ErrorContext(r.Context(), "health check failed: database unreachable", "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"status": "unhealthy",
+			"reason": "database unreachable",
+		})
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (h *APIHandler) CreateEvent(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	defer r.Body.Close()
 
 	var req model.CreateChangeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -40,6 +63,10 @@ func (h *APIHandler) CreateEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	event, err := h.svc.Create(r.Context(), &req)
+	if errors.Is(err, store.ErrDuplicate) {
+		writeJSON(w, http.StatusOK, event)
+		return
+	}
 	if err != nil {
 		mapServiceError(w, err)
 		return
@@ -120,6 +147,10 @@ func (h *APIHandler) ListEvents(w http.ResponseWriter, r *http.Request) {
 
 	if q.Get("top_level") == "true" {
 		params.TopLevel = true
+	}
+
+	if q.Get("alerted") == "true" {
+		params.AlertedOnly = true
 	}
 
 	// Parse tag filters.

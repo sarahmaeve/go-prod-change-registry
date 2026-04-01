@@ -96,7 +96,6 @@ Query by tag `deploy_id:abc123` to see the full lifecycle.
 
 **Priority:** Medium — planned for after the append-only migration.
 
-- **Idempotency keys**: Add an optional `external_id` field with a unique constraint. CI/CD pipelines can retry POSTs safely — if an event with the same `external_id` exists, return the existing event instead of creating a duplicate.
 - **Batch import**: `POST /api/v1/events/batch` accepting an array of events. Useful for backfilling historical data or importing from other systems.
 - **Webhook receivers**: Pre-built handlers for common CI/CD systems:
   - GitHub Actions (deployment events)

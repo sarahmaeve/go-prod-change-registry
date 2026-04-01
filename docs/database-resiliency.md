@@ -12,6 +12,7 @@ Schema is managed exclusively by `golang-migrate/migrate/v4`. The SQLite store (
 |---|---|
 | `001_create_change_events.up.sql` | Creates `change_events` and `change_event_tags` tables with indexes |
 | `002_add_starred_alerted.up.sql` | Adds `starred` and `alerted` INTEGER columns to `change_events` |
+| `003_add_external_id.up.sql` | Adds `external_id` TEXT column with a partial unique index (`WHERE external_id IS NOT NULL`) for idempotency |
 
 ### Why migrations are the sole schema owner
 
@@ -79,6 +80,22 @@ WARN database is in dirty state, forcing version to resolve version=2
 INFO database migrations applied successfully
 ```
 
+## Health Check
+
+The `GET /api/v1/health` endpoint verifies database connectivity by calling `db.PingContext()`. It is registered outside the authentication middleware, so it can be called without a token.
+
+| HTTP Status | Response | Meaning |
+|---|---|---|
+| 200 | `{"status":"ok"}` | Database is reachable, service is healthy |
+| 503 | `{"status":"unhealthy","reason":"database unreachable"}` | Database ping failed |
+
+This endpoint is suitable for:
+- Kubernetes liveness and readiness probes
+- Load balancer health checks
+- Monitoring systems (uptime checks)
+
+When the health check fails, the actual error is logged server-side via `slog.ErrorContext` but not exposed to the client (to avoid leaking internal details).
+
 ## SQLite Configuration
 
 These pragmas are set at connection time via DSN parameters:
@@ -142,3 +159,14 @@ The test schema includes `starred` and `alerted` in the initial CREATE TABLE (ra
 5. Update `scanEventFields` and all SELECT/INSERT/UPDATE queries if columns are added
 6. Run the full test suite: `go test -tags=integration ./... -race`
 7. Test against a fresh database and an existing database with prior migrations applied
+
+### Note on migration 003 (external_id)
+
+Migration 003 adds a nullable `external_id` TEXT column to `change_events` and creates a partial unique index:
+
+```sql
+CREATE UNIQUE INDEX IF NOT EXISTS idx_change_events_external_id
+  ON change_events (external_id) WHERE external_id IS NOT NULL;
+```
+
+The partial index ensures that only non-null values of `external_id` are subject to the uniqueness constraint. Rows where `external_id` is NULL (the default for all existing events) are excluded from the index entirely, so this migration is safe to apply to any existing database without data conflicts.

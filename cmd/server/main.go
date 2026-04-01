@@ -66,7 +66,7 @@ func main() {
 
 	// Create service and handlers.
 	svc := service.NewChangeService(store)
-	apiHandler := handler.NewAPIHandler(svc)
+	apiHandler := handler.NewAPIHandler(svc, db)
 	dashHandler := handler.NewDashboardHandler(svc, cfg.DashboardRefreshSec)
 
 	// Create router and HTTP server.

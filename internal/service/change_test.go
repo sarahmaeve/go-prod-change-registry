@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/sarah/go-prod-change-registry/internal/model"
+	"github.com/sarah/go-prod-change-registry/internal/store"
 )
 
 // mockStore implements store.ChangeStore using function fields so each test can
@@ -588,6 +589,81 @@ func TestToggleStar(t *testing.T) {
 		_, err := svc.ToggleStar(context.Background(), "evt-1", "bob")
 		if !errors.Is(err, storeErr) {
 			t.Fatalf("got error %v, want %v", err, storeErr)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// ExternalID tests
+// ---------------------------------------------------------------------------
+
+func TestCreateExternalID(t *testing.T) {
+	t.Parallel()
+
+	t.Run("external_id passed to store", func(t *testing.T) {
+		t.Parallel()
+
+		var captured *model.ChangeEvent
+		ms := &mockStore{
+			createFn: func(_ context.Context, event *model.ChangeEvent) (*model.ChangeEvent, error) {
+				captured = event
+				cp := *event
+				return &cp, nil
+			},
+		}
+		svc := NewChangeService(ms)
+
+		req := &model.CreateChangeRequest{
+			ExternalID:  "gh-actions-run-999",
+			UserName:    "alice",
+			EventType:   model.EventTypeDeployment,
+			Description: "deploy v10",
+		}
+
+		got, err := svc.Create(context.Background(), req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if captured == nil {
+			t.Fatal("store.Create was not called")
+		}
+		if captured.ExternalID != "gh-actions-run-999" {
+			t.Errorf("captured.ExternalID = %q, want %q", captured.ExternalID, "gh-actions-run-999")
+		}
+		if got.ExternalID != "gh-actions-run-999" {
+			t.Errorf("got.ExternalID = %q, want %q", got.ExternalID, "gh-actions-run-999")
+		}
+	})
+
+	t.Run("duplicate external_id propagates", func(t *testing.T) {
+		t.Parallel()
+
+		existing := &model.ChangeEvent{
+			ID:         "original-evt",
+			ExternalID: "dup-key-1",
+			UserName:   "alice",
+			EventType:  model.EventTypeDeployment,
+		}
+		ms := &mockStore{
+			createFn: func(_ context.Context, _ *model.ChangeEvent) (*model.ChangeEvent, error) {
+				return existing, store.ErrDuplicate
+			},
+		}
+		svc := NewChangeService(ms)
+
+		got, err := svc.Create(context.Background(), &model.CreateChangeRequest{
+			ExternalID: "dup-key-1",
+			UserName:   "bob",
+			EventType:  model.EventTypeDeployment,
+		})
+		if !errors.Is(err, store.ErrDuplicate) {
+			t.Fatalf("expected store.ErrDuplicate, got %v", err)
+		}
+		if got == nil {
+			t.Fatal("expected existing event to be returned")
+		}
+		if got.ID != "original-evt" {
+			t.Errorf("got.ID = %q, want %q", got.ID, "original-evt")
 		}
 	})
 }

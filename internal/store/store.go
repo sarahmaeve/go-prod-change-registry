@@ -10,6 +10,10 @@ import (
 // ErrNotFound is returned when a requested entity does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrDuplicate is returned when an event with the same external_id already exists.
+// The caller receives the existing event alongside this sentinel error.
+var ErrDuplicate = errors.New("duplicate external_id")
+
 // ChangeStore defines the persistence interface for change events.
 // Events are append-only — no Update or Delete operations.
 type ChangeStore interface {

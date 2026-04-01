@@ -5,6 +5,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sarah/go-prod-change-registry/internal/model"
+	"github.com/sarah/go-prod-change-registry/internal/store"
 	"github.com/sarah/go-prod-change-registry/migrations"
 
 	_ "modernc.org/sqlite"
@@ -26,6 +28,7 @@ func applyTestMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
 	migrationFiles := []string{
 		"001_create_change_events.up.sql",
+		"002_add_external_id.up.sql",
 	}
 	for _, name := range migrationFiles {
 		sqlBytes, err := fs.ReadFile(migrations.FS, name)
@@ -224,6 +227,121 @@ func TestCreate(t *testing.T) {
 		// Tags can be nil or empty when none set.
 		if got.Tags != nil && len(got.Tags) != 0 {
 			t.Errorf("len(Tags) = %d, want 0", len(got.Tags))
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// ExternalID / idempotency tests
+// ---------------------------------------------------------------------------
+
+func TestCreateExternalID(t *testing.T) {
+	t.Parallel()
+
+	t.Run("duplicate external_id returns existing event", func(t *testing.T) {
+		t.Parallel()
+
+		s := newTestStore(t)
+		ctx := context.Background()
+
+		ev := makeEvent("ext-1", "alice", model.EventTypeDeployment, time.Now().UTC(), map[string]string{"env": "prod"})
+		ev.ExternalID = "gh-actions-run-123"
+
+		created, err := s.Create(ctx, ev)
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+
+		// Create again with same external_id but different ID.
+		ev2 := makeEvent("ext-2", "bob", model.EventTypeDeployment, time.Now().UTC(), nil)
+		ev2.ExternalID = "gh-actions-run-123"
+
+		duplicate, err := s.Create(ctx, ev2)
+		if !errors.Is(err, store.ErrDuplicate) {
+			t.Fatalf("expected store.ErrDuplicate, got %v", err)
+		}
+		if duplicate == nil {
+			t.Fatal("expected existing event to be returned alongside ErrDuplicate")
+		}
+		if duplicate.ID != created.ID {
+			t.Errorf("duplicate.ID = %q, want %q (original)", duplicate.ID, created.ID)
+		}
+		if duplicate.ExternalID != "gh-actions-run-123" {
+			t.Errorf("duplicate.ExternalID = %q, want %q", duplicate.ExternalID, "gh-actions-run-123")
+		}
+	})
+
+	t.Run("different external_ids create separate events", func(t *testing.T) {
+		t.Parallel()
+
+		s := newTestStore(t)
+		ctx := context.Background()
+
+		ev1 := makeEvent("diff-ext-1", "alice", model.EventTypeDeployment, time.Now().UTC(), nil)
+		ev1.ExternalID = "run-aaa"
+
+		ev2 := makeEvent("diff-ext-2", "bob", model.EventTypeDeployment, time.Now().UTC(), nil)
+		ev2.ExternalID = "run-bbb"
+
+		created1, err := s.Create(ctx, ev1)
+		if err != nil {
+			t.Fatalf("Create ev1: %v", err)
+		}
+		created2, err := s.Create(ctx, ev2)
+		if err != nil {
+			t.Fatalf("Create ev2: %v", err)
+		}
+
+		if created1.ID == created2.ID {
+			t.Errorf("expected different IDs, both got %q", created1.ID)
+		}
+	})
+
+	t.Run("empty external_id does not conflict", func(t *testing.T) {
+		t.Parallel()
+
+		s := newTestStore(t)
+		ctx := context.Background()
+
+		ev1 := makeEvent("empty-ext-1", "alice", model.EventTypeDeployment, time.Now().UTC(), nil)
+		// ExternalID left empty (zero value).
+
+		ev2 := makeEvent("empty-ext-2", "bob", model.EventTypeDeployment, time.Now().UTC(), nil)
+		// ExternalID left empty (zero value).
+
+		_, err := s.Create(ctx, ev1)
+		if err != nil {
+			t.Fatalf("Create ev1: %v", err)
+		}
+		_, err = s.Create(ctx, ev2)
+		if err != nil {
+			t.Fatalf("Create ev2: %v (empty external_id should not conflict)", err)
+		}
+	})
+
+	t.Run("external_id is returned in GetByID", func(t *testing.T) {
+		t.Parallel()
+
+		s := newTestStore(t)
+		ctx := context.Background()
+
+		ev := makeEvent("ext-get-1", "carol", model.EventTypeK8sChange, time.Now().UTC(), nil)
+		ev.ExternalID = "jenkins-build-42"
+
+		_, err := s.Create(ctx, ev)
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+
+		got, err := s.GetByID(ctx, "ext-get-1")
+		if err != nil {
+			t.Fatalf("GetByID: %v", err)
+		}
+		if got == nil {
+			t.Fatal("GetByID returned nil")
+		}
+		if got.ExternalID != "jenkins-build-42" {
+			t.Errorf("ExternalID = %q, want %q", got.ExternalID, "jenkins-build-42")
 		}
 	})
 }

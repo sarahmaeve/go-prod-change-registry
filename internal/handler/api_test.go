@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -76,10 +77,19 @@ type testStack struct {
 
 // newTestStack creates a full test stack: mockStore -> ChangeService -> APIHandler,
 // wired to a chi router so that chi.URLParam works correctly.
+// mockPinger implements handler.Pinger for tests.
+type mockPinger struct {
+	err error
+}
+
+func (p *mockPinger) PingContext(_ context.Context) error {
+	return p.err
+}
+
 func newTestStack() *testStack {
 	ms := &mockStore{}
 	svc := service.NewChangeService(ms)
-	h := handler.NewAPIHandler(svc)
+	h := handler.NewAPIHandler(svc, &mockPinger{})
 
 	r := chi.NewRouter()
 	r.Get("/api/v1/health", h.HealthCheck)
@@ -102,22 +112,53 @@ func newTestStack() *testStack {
 func TestHealthCheck(t *testing.T) {
 	t.Parallel()
 
-	ts := newTestStack()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
-	rec := httptest.NewRecorder()
-	ts.router.ServeHTTP(rec, req)
+	t.Run("healthy database returns 200", func(t *testing.T) {
+		t.Parallel()
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", rec.Code)
-	}
+		ts := newTestStack()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+		rec := httptest.NewRecorder()
+		ts.router.ServeHTTP(rec, req)
 
-	var body map[string]string
-	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-	if body["status"] != "ok" {
-		t.Fatalf("expected status ok, got %q", body["status"])
-	}
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d", rec.Code)
+		}
+
+		var body map[string]string
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if body["status"] != "ok" {
+			t.Fatalf("expected status ok, got %q", body["status"])
+		}
+	})
+
+	t.Run("unreachable database returns 503", func(t *testing.T) {
+		t.Parallel()
+
+		ms := &mockStore{}
+		svc := service.NewChangeService(ms)
+		h := handler.NewAPIHandler(svc, &mockPinger{err: errors.New("connection refused")})
+
+		r := chi.NewRouter()
+		r.Get("/api/v1/health", h.HealthCheck)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected status 503, got %d", rec.Code)
+		}
+
+		var body map[string]string
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if body["status"] != "unhealthy" {
+			t.Fatalf("expected status unhealthy, got %q", body["status"])
+		}
+	})
 }
 
 // ---------- CreateEvent ----------
@@ -328,6 +369,47 @@ func TestCreateEvent(t *testing.T) {
 		}
 		if event.EventType != "star" {
 			t.Fatalf("expected event_type star, got %q", event.EventType)
+		}
+	})
+
+	t.Run("duplicate external_id returns 200 with existing event", func(t *testing.T) {
+		t.Parallel()
+
+		ts := newTestStack()
+
+		now := time.Now().UTC()
+		existingEvent := &model.ChangeEvent{
+			ID:          "evt-original-ext",
+			ExternalID:  "gh-actions-run-555",
+			UserName:    "alice",
+			EventType:   "deployment",
+			Description: "deploy v3.0",
+			Timestamp:   now,
+			CreatedAt:   now,
+		}
+		ts.store.createFn = func(_ context.Context, _ *model.ChangeEvent) (*model.ChangeEvent, error) {
+			return existingEvent, store.ErrDuplicate
+		}
+
+		payload := `{"external_id":"gh-actions-run-555","user_name":"bob","event_type":"deployment","description":"deploy v3.0 retry"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/events", bytes.NewBufferString(payload))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		ts.router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status 200 for duplicate external_id, got %d; body: %s", rec.Code, rec.Body.String())
+		}
+
+		var event model.ChangeEvent
+		if err := json.NewDecoder(rec.Body).Decode(&event); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if event.ID != "evt-original-ext" {
+			t.Errorf("expected original event ID %q, got %q", "evt-original-ext", event.ID)
+		}
+		if event.ExternalID != "gh-actions-run-555" {
+			t.Errorf("expected external_id %q, got %q", "gh-actions-run-555", event.ExternalID)
 		}
 	})
 }

@@ -45,7 +45,7 @@ The API is append-only. There are no PUT, PATCH, or DELETE endpoints. Events are
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/v1/health` | Health check |
+| `GET` | `/api/v1/health` | Health check (no auth required, verifies DB connectivity) |
 | `POST` | `/api/v1/events` | Create a change event or meta-event |
 | `GET` | `/api/v1/events` | List events (with filters) |
 | `GET` | `/api/v1/events/{id}` | Get a single event |
@@ -71,8 +71,16 @@ The API is append-only. There are no PUT, PATCH, or DELETE endpoints. Events are
 
 **Health check:**
 
+The health endpoint does not require authentication and verifies database connectivity.
+It is suitable for use as a Kubernetes liveness/readiness probe or load balancer health check.
+
 ```bash
-pcr http://localhost:8080/api/v1/health
+# No auth needed
+curl -s http://localhost:8080/api/v1/health
+# Returns 200: {"status":"ok"}
+
+# When database is unreachable:
+# Returns 503: {"status":"unhealthy","reason":"database unreachable"}
 ```
 
 **Create an event:**
@@ -200,6 +208,54 @@ Query by tag to see the full lifecycle:
 pcr "http://localhost:8080/api/v1/events?tag=deploy_id%3Dabc123"
 ```
 
+## Idempotency
+
+The API supports an optional `external_id` field on events, which acts as an idempotency key. This allows CI/CD pipelines and automation to safely retry requests without creating duplicate events.
+
+### How it works
+
+- `external_id` is an optional string field on the create-event request.
+- A partial unique index enforces that no two events share the same non-null `external_id`.
+- On the first POST with a given `external_id`, the server creates the event and returns **201 Created**.
+- On a subsequent POST with the same `external_id`, the server returns the existing event with **200 OK** instead of creating a duplicate.
+- If `external_id` is omitted (or null), no uniqueness check is performed and the event is always created.
+
+### Generating an external_id
+
+Callers should construct `external_id` from a combination of the source system and a unique operation identifier. The value must be globally unique across all events in the registry.
+
+| Source | Pattern | Example |
+|---|---|---|
+| GitHub Actions | `github-actions-{run_id}-{job}` | `github-actions-12345-deploy` |
+| GitLab CI | `gitlab-{pipeline_id}-{job_id}` | `gitlab-8901-deploy-prod` |
+| ArgoCD | `argocd-{app}-{revision}` | `argocd-api-abc123f` |
+| Terraform | `terraform-{workspace}-{run_id}` | `terraform-prod-run-567` |
+| LLM agent | `agent-{session}-{action}` | `agent-sess-a1b2-deploy` |
+
+### Example: create with external_id and retry
+
+```bash
+# First request -- creates the event (201 Created)
+pcr -X POST http://localhost:8080/api/v1/events -d '{
+  "external_id": "github-actions-12345-deploy",
+  "user_name": "ci-bot",
+  "event_type": "deployment",
+  "description": "Deploy api v3.1.0",
+  "tags": {"service": "api", "env": "prod"}
+}'
+
+# Retry (network blip, webhook redelivery, etc.) -- returns the same event (200 OK)
+pcr -X POST http://localhost:8080/api/v1/events -d '{
+  "external_id": "github-actions-12345-deploy",
+  "user_name": "ci-bot",
+  "event_type": "deployment",
+  "description": "Deploy api v3.1.0",
+  "tags": {"service": "api", "env": "prod"}
+}'
+```
+
+Both requests return the same event (same `id`, same `created_at`). The second request is a no-op.
+
 ## Dashboard
 
 The built-in HTML dashboard is served at `/` and requires authentication via the `?token=` query parameter (e.g., `/?token=my-secret-token`). It provides:
@@ -218,6 +274,7 @@ Events are immutable. There are no update or delete operations. The core `Change
 | Field | Type | Description |
 |---|---|---|
 | `id` | string | Unique identifier (generated) |
+| `external_id` | string (optional) | Caller-supplied idempotency key (unique when non-null) |
 | `parent_id` | string (optional) | References another event's ID, making this a meta-event |
 | `user_name` | string | Who made the change |
 | `timestamp` | RFC 3339 | When the change happened |

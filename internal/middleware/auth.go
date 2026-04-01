@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -22,19 +23,14 @@ type authErrorDetail struct {
 // GET and HEAD requests are allowed without authentication. The /api/v1/health
 // endpoint is always exempt from authentication.
 func Auth(tokens []string, requireForReads bool) func(http.Handler) http.Handler {
-	tokenSet := make(map[string]struct{}, len(tokens))
-	for _, t := range tokens {
-		tokenSet[t] = struct{}{}
+	// Store tokens as byte slices for constant-time comparison.
+	validTokens := make([][]byte, len(tokens))
+	for i, t := range tokens {
+		validTokens[i] = []byte(t)
 	}
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Health endpoint is always exempt.
-			if r.URL.Path == "/api/v1/health" {
-				next.ServeHTTP(w, r)
-				return
-			}
-
 			// Skip auth for read methods when not required.
 			if !requireForReads && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 				next.ServeHTTP(w, r)
@@ -47,7 +43,7 @@ func Auth(tokens []string, requireForReads bool) func(http.Handler) http.Handler
 				return
 			}
 
-			if _, ok := tokenSet[token]; !ok {
+			if !validateToken([]byte(token), validTokens) {
 				writeAuthError(w, "invalid token")
 				return
 			}
@@ -55,6 +51,17 @@ func Auth(tokens []string, requireForReads bool) func(http.Handler) http.Handler
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// validateToken checks the provided token against the valid tokens list
+// using constant-time comparison to prevent timing side-channel attacks.
+func validateToken(provided []byte, validTokens [][]byte) bool {
+	for _, valid := range validTokens {
+		if subtle.ConstantTimeCompare(provided, valid) == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 // extractToken pulls the token from an "Authorization: Bearer <token>" header,
