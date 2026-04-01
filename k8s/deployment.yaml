@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pcr-server
+  namespace: pcr
+  labels:
+    app: pcr-server
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: pcr-server
+  template:
+    metadata:
+      labels:
+        app: pcr-server
+    spec:
+      containers:
+        - name: pcr-server
+          image: pcr-server:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: pcr-config
+          env:
+            - name: PCR_API_TOKENS
+              valueFrom:
+                secretKeyRef:
+                  name: pcr-secrets
+                  key: api-tokens
+            - name: PCR_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: pcr-secrets
+                  key: session-secret
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: pcr-data

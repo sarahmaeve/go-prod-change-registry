@@ -33,3 +33,22 @@ vet:
 audit:
 	go vet ./...
 	govulncheck ./...
+
+# Docker targets
+.PHONY: docker-build docker-run docker-compose-up docker-compose-down
+
+docker-build:
+	docker build -t pcr-server .
+
+docker-run: docker-build
+	docker run --rm -p 8080:8080 \
+		-e PCR_API_TOKENS=$${PCR_API_TOKENS:-changeme} \
+		-e PCR_SESSION_SECRET=$${PCR_SESSION_SECRET:-docker-dev-secret} \
+		-v pcr-data:/data \
+		pcr-server
+
+docker-compose-up:
+	docker compose up --build
+
+docker-compose-down:
+	docker compose down

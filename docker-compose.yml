@@ -1,0 +1,17 @@
+services:
+  pcr-server:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - pcr-data:/data
+    environment:
+      PCR_API_TOKENS: "${PCR_API_TOKENS:-changeme}"
+      PCR_SESSION_SECRET: "${PCR_SESSION_SECRET:-docker-dev-secret}"
+      PCR_DATABASE_PATH: /data/registry.db
+      PCR_AUTO_MIGRATE: "true"
+      PCR_REQUIRE_AUTH_READS: "true"
+    restart: unless-stopped
+
+volumes:
+  pcr-data:

@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pcr-config
+  namespace: pcr
+data:
+  PCR_ADDR: ":8080"
+  PCR_DATABASE_PATH: "/data/registry.db"
+  PCR_AUTO_MIGRATE: "true"
+  PCR_REQUIRE_AUTH_READS: "true"
+  PCR_DASHBOARD_REFRESH_SEC: "60"

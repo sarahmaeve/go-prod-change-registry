@@ -314,6 +314,19 @@ web/               Embedded static assets and HTML templates
 docs/              Design documents and roadmap
 ```
 
+## Deployment
+
+Three deployment options, from simplest to most production-like:
+
+| Method | Command | Best for |
+|---|---|---|
+| **Binary** | `make build && PCR_API_TOKENS=token ./bin/pcr-server` | Local development |
+| **Docker** | `make docker-run` | Containerized local testing |
+| **Docker Compose** | `PCR_API_TOKENS=token docker compose up -d --build` | Local dev with persistence |
+| **Kubernetes (kind)** | `kind create cluster` + `kubectl apply -f k8s/` | Testing k8s deployment |
+
+See [docs/deployment.md](docs/deployment.md) for full instructions, including sanity checks for each method.
+
 ## Development
 
 ### Make targets
@@ -329,6 +342,10 @@ docs/              Design documents and roadmap
 | `make vet` | Run `go vet` |
 | `make audit` | Run `go vet` + `govulncheck` |
 | `make clean` | Remove build artifacts |
+| `make docker-build` | Build Docker image |
+| `make docker-run` | Build and run Docker container |
+| `make docker-compose-up` | Start with Docker Compose |
+| `make docker-compose-down` | Stop Docker Compose |
 
 ### Integration tests
 
