@@ -186,3 +186,105 @@ func TestAuth(t *testing.T) {
 		}
 	})
 }
+
+func TestAuthSessionCookie(t *testing.T) {
+	t.Parallel()
+
+	okHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	sessionSecret := []byte("session-test-secret")
+
+	t.Run("valid session cookie allows POST request through", func(t *testing.T) {
+		t.Parallel()
+
+		mw := middleware.Auth([]string{"token"}, true, sessionSecret)
+		srv := mw(okHandler)
+
+		// Create a valid session cookie.
+		cookieRec := httptest.NewRecorder()
+		middleware.SetSessionCookie(cookieRec, sessionSecret)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/events", nil)
+		for _, c := range cookieRec.Result().Cookies() {
+			req.AddCookie(c)
+		}
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rec.Code)
+		}
+	})
+
+	t.Run("invalid session cookie returns 401 for POST", func(t *testing.T) {
+		t.Parallel()
+
+		mw := middleware.Auth([]string{"token"}, true, sessionSecret)
+		srv := mw(okHandler)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/events", nil)
+		req.AddCookie(&http.Cookie{Name: middleware.SessionCookieName, Value: "invalid-value"})
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d", rec.Code)
+		}
+	})
+
+	t.Run("session cookie ignored when sessionSecret is nil", func(t *testing.T) {
+		t.Parallel()
+
+		mw := middleware.Auth([]string{"token"}, true, nil)
+		srv := mw(okHandler)
+
+		// Set a valid cookie (signed with some secret), but middleware has nil secret.
+		cookieRec := httptest.NewRecorder()
+		middleware.SetSessionCookie(cookieRec, sessionSecret)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/events", nil)
+		for _, c := range cookieRec.Result().Cookies() {
+			req.AddCookie(c)
+		}
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 when sessionSecret is nil, got %d", rec.Code)
+		}
+	})
+}
+
+func TestSecurityHeaders(t *testing.T) {
+	t.Parallel()
+
+	var called bool
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.Write([]byte("ok"))
+	})
+	handler := middleware.SecurityHeaders()(inner)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if !called {
+		t.Fatal("inner handler was not called")
+	}
+
+	tests := []struct {
+		header   string
+		expected string
+	}{
+		{"Referrer-Policy", "no-referrer"},
+		{"X-Content-Type-Options", "nosniff"},
+	}
+	for _, tc := range tests {
+		got := rec.Header().Get(tc.header)
+		if got != tc.expected {
+			t.Errorf("header %q = %q, want %q", tc.header, got, tc.expected)
+		}
+	}
+}

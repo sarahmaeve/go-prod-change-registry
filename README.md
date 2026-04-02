@@ -1,6 +1,6 @@
 # go-prod-change-registry
 
-A lightweight, append-only change registry for production environments. It records deployments, feature-flag flips, infrastructure mutations, and other production changes as immutable events in a SQLite-backed store, then exposes them through a RESTful API and an HTML dashboard. Teams use it to correlate production changes with incidents and understand what changed, when, and by whom.
+A lightweight, append-only change registry for production environments. It records deployments, feature-flag flips, infrastructure mutations, and other production changes as immutable events in a SQLite-backed store, then exposes them through a RESTful API and an HTML dashboard. Teams can use it to correlate production changes with incidents and understand what changed, when, and by whom.
 
 ## Quickstart
 

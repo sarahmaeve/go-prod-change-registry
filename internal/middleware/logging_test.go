@@ -125,4 +125,59 @@ func TestLogger(t *testing.T) {
 			t.Errorf("expected log level ERROR for 500, got %q", entry.Level)
 		}
 	})
+
+	t.Run("Write without explicit WriteHeader defaults to 200", func(t *testing.T) {
+		var buf bytes.Buffer
+
+		handler := middleware.Logger()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte("hello"))
+		}))
+
+		req := httptest.NewRequest(http.MethodGet, "/implicit-200", nil)
+		rec := httptest.NewRecorder()
+
+		withCapturedLog(&buf, func() {
+			handler.ServeHTTP(rec, req)
+		})
+
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected response status 200, got %d", rec.Code)
+		}
+
+		var entry logEntry
+		if err := json.Unmarshal(buf.Bytes(), &entry); err != nil {
+			t.Fatalf("failed to parse log output: %v\nraw: %s", err, buf.String())
+		}
+		if entry.Status != http.StatusOK {
+			t.Errorf("expected logged status 200, got %d", entry.Status)
+		}
+	})
+
+	t.Run("double WriteHeader only records the first status", func(t *testing.T) {
+		var buf bytes.Buffer
+
+		handler := middleware.Logger()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusCreated)
+			w.WriteHeader(http.StatusInternalServerError) // should be ignored
+		}))
+
+		req := httptest.NewRequest(http.MethodPost, "/double-header", nil)
+		rec := httptest.NewRecorder()
+
+		withCapturedLog(&buf, func() {
+			handler.ServeHTTP(rec, req)
+		})
+
+		if rec.Code != http.StatusCreated {
+			t.Errorf("expected response status 201, got %d", rec.Code)
+		}
+
+		var entry logEntry
+		if err := json.Unmarshal(buf.Bytes(), &entry); err != nil {
+			t.Fatalf("failed to parse log output: %v\nraw: %s", err, buf.String())
+		}
+		if entry.Status != http.StatusCreated {
+			t.Errorf("expected logged status 201, got %d", entry.Status)
+		}
+	})
 }

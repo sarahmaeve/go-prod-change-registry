@@ -3,19 +3,25 @@ LDFLAGS := -ldflags "-X main.Version=$(VERSION)"
 
 .DEFAULT_GOAL := build
 
-.PHONY: build clean test test-short lint fmt run vet audit
+.PHONY: build clean test test-short coverage lint fmt run vet audit
 
 build:
 	go build $(LDFLAGS) -o bin/pcr-server ./cmd/server
 
 clean:
 	rm -rf bin/
+	rm -f coverage.out coverage.html
 
 test:
 	go test -race -cover ./...
 
 test-short:
 	go test -short ./...
+
+coverage:
+	go test -race -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out -o coverage.html
+	open coverage.html
 
 lint:
 	golangci-lint run ./...
