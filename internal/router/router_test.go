@@ -11,6 +11,7 @@ import (
 
 	"github.com/sarah/go-prod-change-registry/internal/config"
 	"github.com/sarah/go-prod-change-registry/internal/handler"
+	"github.com/sarah/go-prod-change-registry/internal/middleware"
 	"github.com/sarah/go-prod-change-registry/internal/model"
 	"github.com/sarah/go-prod-change-registry/internal/router"
 	"github.com/sarah/go-prod-change-registry/internal/service"
@@ -109,8 +110,8 @@ func newTestRouter(t *testing.T, requireAuthReads bool) (http.Handler, *mockStor
 
 	svc := service.NewChangeService(ms)
 	apiH := handler.NewAPIHandler(svc, &mockPinger{})
-	dashH := handler.NewDashboardHandler(svc, 0)
-	loginH := handler.NewLoginHandler([]string{testToken}, []byte("test-session-secret"))
+	dashH := handler.NewDashboardHandler(svc, 0, []byte("test-session-secret"))
+	loginH := handler.NewLoginHandler([]string{testToken}, middleware.SessionOptions{Secret: []byte("test-session-secret")})
 
 	cfg := &config.Config{
 		APITokens:        []string{testToken},

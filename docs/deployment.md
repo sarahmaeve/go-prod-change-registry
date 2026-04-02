@@ -50,7 +50,8 @@ curl -s -H "Authorization: Bearer my-secret-token" \
   "http://localhost:8080/api/v1/events?top_level=true" | jq '.total_count'
 
 # Open dashboard in browser
-open "http://localhost:8080/login?token=my-secret-token"
+# Open the login form and enter the token
+open "http://localhost:8080/login"
 ```
 
 ### Tear down
@@ -97,7 +98,8 @@ curl -s -X POST -H "Authorization: Bearer my-secret-token" \
   "event_type": "feature-flag",
   "description": "compose sanity check"
 }' | jq '{id, description}'
-open "http://localhost:8080/login?token=my-secret-token"
+# Open the login form and enter the token
+open "http://localhost:8080/login"
 ```
 
 ### View logs
@@ -223,6 +225,7 @@ All methods use the same environment variables. Key settings:
 | `PCR_SHUTDOWN_TIMEOUT` | No | `15s` | Graceful shutdown timeout (Go duration) |
 | `PCR_DB_BUSY_TIMEOUT` | No | `5s` | How long SQLite waits for a write lock |
 | `PCR_DB_SLOW_QUERY_THRESHOLD` | No | `100ms` | Log a warning when a store operation exceeds this |
+| `PCR_COOKIE_SECURE` | No | `true` | Set the `Secure` flag on session cookies. Set to `false` for local dev without TLS |
 
 See the README for the full configuration reference.
 

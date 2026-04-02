@@ -12,17 +12,18 @@ import (
 
 // Config holds the application configuration sourced from environment variables.
 type Config struct {
-	Addr                string
-	DatabasePath        string
-	APITokens           []string
-	SessionSecret       []byte
-	RequireAuthReads    bool
-	AutoMigrate         bool
-	DashboardRefreshSec int
-	ReadTimeout         time.Duration
-	WriteTimeout        time.Duration
-	ShutdownTimeout     time.Duration
-	DBBusyTimeout       time.Duration
+	Addr                 string
+	DatabasePath         string
+	APITokens            []string
+	SessionSecret        []byte
+	CookieSecure         bool
+	RequireAuthReads     bool
+	AutoMigrate          bool
+	DashboardRefreshSec  int
+	ReadTimeout          time.Duration
+	WriteTimeout         time.Duration
+	ShutdownTimeout      time.Duration
+	DBBusyTimeout        time.Duration
 	DBSlowQueryThreshold time.Duration
 }
 
@@ -32,6 +33,7 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		Addr:                envOrDefault("PCR_ADDR", ":8080"),
 		DatabasePath:        envOrDefault("PCR_DATABASE_PATH", "registry.db"),
+		CookieSecure:        true,
 		RequireAuthReads:    true,
 		AutoMigrate:         true,
 		DashboardRefreshSec: 60,
@@ -88,6 +90,15 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("PCR_AUTO_MIGRATE: %w", err)
 		}
 		cfg.AutoMigrate = b
+	}
+
+	// PCR_COOKIE_SECURE — set to false for dev without TLS (default true).
+	if v := os.Getenv("PCR_COOKIE_SECURE"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("PCR_COOKIE_SECURE: %w", err)
+		}
+		cfg.CookieSecure = b
 	}
 
 	// PCR_DASHBOARD_REFRESH_SEC

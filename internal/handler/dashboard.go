@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/sarah/go-prod-change-registry/internal/middleware"
 	"github.com/sarah/go-prod-change-registry/internal/model"
 	"github.com/sarah/go-prod-change-registry/internal/service"
 	"github.com/sarah/go-prod-change-registry/web"
@@ -20,13 +21,14 @@ import (
 // DashboardHandler serves the server-rendered HTML dashboard.
 type DashboardHandler struct {
 	svc           *service.ChangeService
+	sessionSecret []byte
 	refreshSec    int
 	dashboardTmpl *template.Template
 	detailTmpl    *template.Template
 }
 
 // NewDashboardHandler parses the embedded templates and returns a ready handler.
-func NewDashboardHandler(svc *service.ChangeService, refreshSec int) *DashboardHandler {
+func NewDashboardHandler(svc *service.ChangeService, refreshSec int, sessionSecret []byte) *DashboardHandler {
 	funcMap := template.FuncMap{
 		"formatTime": func(t time.Time) string {
 			return t.UTC().Format("2006-01-02 15:04:05 UTC")
@@ -68,6 +70,7 @@ func NewDashboardHandler(svc *service.ChangeService, refreshSec int) *DashboardH
 
 	return &DashboardHandler{
 		svc:           svc,
+		sessionSecret: sessionSecret,
 		refreshSec:    refreshSec,
 		dashboardTmpl: dashboardTmpl,
 		detailTmpl:    detailTmpl,
@@ -95,6 +98,7 @@ type dashboardEvent struct {
 // dashboardData is the template data for the dashboard page.
 type dashboardData struct {
 	RefreshSec  int
+	CSRFToken   string
 	Events      []dashboardEvent
 	Filters     dashboardFilters
 	TotalCount  int
@@ -239,8 +243,11 @@ func (h *DashboardHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	offsetEnd := offset + len(result.Events)
 
+	csrfToken := middleware.GenerateCSRFToken(h.sessionSecret, middleware.SessionNonce(r))
+
 	data := dashboardData{
 		RefreshSec:  h.refreshSec,
+		CSRFToken:   csrfToken,
 		Events:      dashEvents,
 		Filters:     filters,
 		TotalCount:  result.TotalCount,
@@ -294,6 +301,14 @@ func (h *DashboardHandler) Detail(w http.ResponseWriter, r *http.Request) {
 
 // ToggleStar handles POST /events/{id}/star -- posts a meta-event and redirects back.
 func (h *DashboardHandler) ToggleStar(w http.ResponseWriter, r *http.Request) {
+	// Validate CSRF token from form submission.
+	nonce := middleware.SessionNonce(r)
+	csrfToken := r.FormValue("csrf_token")
+	if !middleware.ValidateCSRFToken(h.sessionSecret, nonce, csrfToken) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
 	id := chi.URLParam(r, "id")
 
 	_, err := h.svc.ToggleStar(r.Context(), id, "dashboard-user")
@@ -306,11 +321,17 @@ func (h *DashboardHandler) ToggleStar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	referer := r.Header.Get("Referer")
-	if referer == "" {
-		referer = "/"
+	redirect := "/"
+	if referer := r.Header.Get("Referer"); referer != "" {
+		// security: only use the path to prevent open redirects to external hosts.
+		if u, err := url.Parse(referer); err == nil && u.Path != "" {
+			redirect = u.Path
+			if u.RawQuery != "" {
+				redirect += "?" + u.RawQuery
+			}
+		}
 	}
-	http.Redirect(w, r, referer, http.StatusSeeOther)
+	http.Redirect(w, r, redirect, http.StatusSeeOther)
 }
 
 // paginationURL builds a URL preserving current query params but updating offset and limit.

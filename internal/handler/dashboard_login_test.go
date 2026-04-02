@@ -3,6 +3,7 @@ package handler_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,12 +23,15 @@ type loginStack struct {
 	router  chi.Router
 }
 
-func newLoginTestStack(tokens []string, sessionSecret []byte) *loginStack {
-	h := handler.NewLoginHandler(tokens, sessionSecret)
+func newLoginTestStack(tokens []string, sessionOpts middleware.SessionOptions) *loginStack {
+	h := handler.NewLoginHandler(tokens, sessionOpts)
 	r := chi.NewRouter()
-	r.Get("/login", h.Login)
+	r.Get("/login", h.ShowLoginForm)
+	r.Post("/login", h.Login)
 	return &loginStack{handler: h, router: r}
 }
+
+var dashboardSessionSecret = []byte("test-session-secret")
 
 // dashboardStack holds the components for DashboardHandler tests.
 type dashboardStack struct {
@@ -40,7 +44,7 @@ type dashboardStack struct {
 func newDashboardTestStack() *dashboardStack {
 	ms := &mockStore{}
 	svc := service.NewChangeService(ms)
-	h := handler.NewDashboardHandler(svc, 60)
+	h := handler.NewDashboardHandler(svc, 60, dashboardSessionSecret)
 
 	r := chi.NewRouter()
 	r.Get("/", h.Dashboard)
@@ -55,16 +59,57 @@ func newDashboardTestStack() *dashboardStack {
 	}
 }
 
+// addCSRFToRequest creates a valid session cookie and CSRF form body for POST tests.
+func addCSRFToRequest(t *testing.T, req *http.Request) {
+	t.Helper()
+	opts := middleware.SessionOptions{Secret: dashboardSessionSecret}
+	rec := httptest.NewRecorder()
+	middleware.SetSessionCookie(rec, opts)
+	for _, c := range rec.Result().Cookies() {
+		req.AddCookie(c)
+	}
+	nonce := rec.Result().Cookies()[0].Value
+	// Extract nonce from the cookie value (first colon-separated part).
+	parts := strings.SplitN(nonce, ":", 3)
+	csrfToken := middleware.GenerateCSRFToken(dashboardSessionSecret, parts[0])
+	// Set form value for csrf_token.
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Body = http.NoBody
+	req.Form = map[string][]string{
+		"csrf_token": {csrfToken},
+	}
+}
+
 // ---------- LoginHandler ----------
 
 func TestLogin(t *testing.T) {
 	t.Parallel()
 
-	t.Run("valid token sets session cookie and redirects", func(t *testing.T) {
+	loginOpts := middleware.SessionOptions{Secret: []byte("test-secret")}
+
+	t.Run("GET shows login form", func(t *testing.T) {
 		t.Parallel()
 
-		ls := newLoginTestStack([]string{"valid-token-1"}, []byte("test-secret"))
-		req := httptest.NewRequest(http.MethodGet, "/login?token=valid-token-1", nil)
+		ls := newLoginTestStack([]string{"valid-token-1"}, loginOpts)
+		req := httptest.NewRequest(http.MethodGet, "/login", nil)
+		rec := httptest.NewRecorder()
+		ls.router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), `name="token"`) {
+			t.Error("expected login form with token input field")
+		}
+	})
+
+	t.Run("valid POST sets session cookie and redirects", func(t *testing.T) {
+		t.Parallel()
+
+		ls := newLoginTestStack([]string{"valid-token-1"}, loginOpts)
+		body := strings.NewReader("token=valid-token-1")
+		req := httptest.NewRequest(http.MethodPost, "/login", body)
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		rec := httptest.NewRecorder()
 		ls.router.ServeHTTP(rec, req)
 
@@ -96,25 +141,41 @@ func TestLogin(t *testing.T) {
 		}
 	})
 
+	t.Run("second token in multi-token list works", func(t *testing.T) {
+		t.Parallel()
+
+		ls := newLoginTestStack([]string{"first-token", "second-token"}, loginOpts)
+		body := strings.NewReader("token=second-token")
+		req := httptest.NewRequest(http.MethodPost, "/login", body)
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		ls.router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusSeeOther {
+			t.Fatalf("expected 303, got %d", rec.Code)
+		}
+	})
+
 	unauthorizedCases := []struct {
-		name  string
-		query string
+		name string
+		body string
 	}{
-		{"missing token", "/login"},
-		{"invalid token", "/login?token=wrong-token"},
-		{"empty token", "/login?token="},
+		{"missing token", ""},
+		{"invalid token", "token=wrong-token"},
+		{"empty token", "token="},
 	}
 	for _, tc := range unauthorizedCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			ls := newLoginTestStack([]string{"valid-token-1"}, []byte("test-secret"))
-			req := httptest.NewRequest(http.MethodGet, tc.query, nil)
+			ls := newLoginTestStack([]string{"valid-token-1"}, loginOpts)
+			req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			rec := httptest.NewRecorder()
 			ls.router.ServeHTTP(rec, req)
 
 			if rec.Code != http.StatusUnauthorized {
-				t.Fatalf("expected 401, got %d", rec.Code)
+				t.Fatalf("expected 401, got %d; body: %s", rec.Code, rec.Body.String())
 			}
 			for _, c := range rec.Result().Cookies() {
 				if c.Name == middleware.SessionCookieName {
@@ -316,7 +377,7 @@ func TestDashboard(t *testing.T) {
 			events := make([]model.ChangeEvent, 20)
 			for i := range events {
 				events[i] = model.ChangeEvent{
-					ID:        "evt-page-" + strings.Repeat("0", i),
+					ID:        fmt.Sprintf("evt-page-%03d", i),
 					EventType: "deployment",
 					Timestamp: time.Now().UTC(),
 					CreatedAt: time.Now().UTC(),
@@ -359,7 +420,7 @@ func TestDashboard(t *testing.T) {
 		}
 	})
 
-	t.Run("service error returns 500", func(t *testing.T) {
+	t.Run("service error returns 500 without leaking internals", func(t *testing.T) {
 		t.Parallel()
 
 		ds := newDashboardTestStack()
@@ -373,6 +434,9 @@ func TestDashboard(t *testing.T) {
 
 		if rec.Code != http.StatusInternalServerError {
 			t.Fatalf("expected 500, got %d", rec.Code)
+		}
+		if strings.Contains(rec.Body.String(), "database connection lost") {
+			t.Error("internal error message leaked to response body")
 		}
 	})
 }
@@ -445,7 +509,7 @@ func TestDetail(t *testing.T) {
 		}
 	})
 
-	t.Run("service error returns 500", func(t *testing.T) {
+	t.Run("service error returns 500 without leaking internals", func(t *testing.T) {
 		t.Parallel()
 
 		ds := newDashboardTestStack()
@@ -459,6 +523,9 @@ func TestDetail(t *testing.T) {
 
 		if rec.Code != http.StatusInternalServerError {
 			t.Fatalf("expected 500, got %d", rec.Code)
+		}
+		if strings.Contains(rec.Body.String(), "disk I/O error") {
+			t.Error("internal error message leaked to response body")
 		}
 	})
 }
@@ -492,7 +559,7 @@ func TestDashboardToggleStar(t *testing.T) {
 		}
 	}
 
-	t.Run("successful toggle redirects to referer", func(t *testing.T) {
+	t.Run("successful toggle redirects to referer path only", func(t *testing.T) {
 		t.Parallel()
 
 		ds := newDashboardTestStack()
@@ -500,14 +567,36 @@ func TestDashboardToggleStar(t *testing.T) {
 
 		req := httptest.NewRequest(http.MethodPost, "/events/evt-star-001/star", nil)
 		req.Header.Set("Referer", "/events/evt-star-001")
+		addCSRFToRequest(t, req)
+		rec := httptest.NewRecorder()
+		ds.router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusSeeOther {
+			t.Fatalf("expected 303, got %d; body: %s", rec.Code, rec.Body.String())
+		}
+		if loc := rec.Header().Get("Location"); loc != "/events/evt-star-001" {
+			t.Fatalf("expected Location /events/evt-star-001, got %q", loc)
+		}
+	})
+
+	t.Run("external referer does not cause open redirect", func(t *testing.T) {
+		t.Parallel()
+
+		ds := newDashboardTestStack()
+		setupToggleStarMocks(ds)
+
+		req := httptest.NewRequest(http.MethodPost, "/events/evt-star-001/star", nil)
+		req.Header.Set("Referer", "https://evil.com/phish")
+		addCSRFToRequest(t, req)
 		rec := httptest.NewRecorder()
 		ds.router.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusSeeOther {
 			t.Fatalf("expected 303, got %d", rec.Code)
 		}
-		if loc := rec.Header().Get("Location"); loc != "/events/evt-star-001" {
-			t.Fatalf("expected Location /events/evt-star-001, got %q", loc)
+		loc := rec.Header().Get("Location")
+		if strings.Contains(loc, "evil.com") {
+			t.Fatalf("redirect to external host: %q", loc)
 		}
 	})
 
@@ -518,6 +607,7 @@ func TestDashboardToggleStar(t *testing.T) {
 		setupToggleStarMocks(ds)
 
 		req := httptest.NewRequest(http.MethodPost, "/events/evt-star-001/star", nil)
+		addCSRFToRequest(t, req)
 		rec := httptest.NewRecorder()
 		ds.router.ServeHTTP(rec, req)
 
@@ -526,6 +616,21 @@ func TestDashboardToggleStar(t *testing.T) {
 		}
 		if loc := rec.Header().Get("Location"); loc != "/" {
 			t.Fatalf("expected Location /, got %q", loc)
+		}
+	})
+
+	t.Run("missing CSRF token returns 403", func(t *testing.T) {
+		t.Parallel()
+
+		ds := newDashboardTestStack()
+		setupToggleStarMocks(ds)
+
+		req := httptest.NewRequest(http.MethodPost, "/events/evt-star-001/star", nil)
+		rec := httptest.NewRecorder()
+		ds.router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("expected 403, got %d; body: %s", rec.Code, rec.Body.String())
 		}
 	})
 
@@ -538,6 +643,7 @@ func TestDashboardToggleStar(t *testing.T) {
 		}
 
 		req := httptest.NewRequest(http.MethodPost, "/events/nonexistent/star", nil)
+		addCSRFToRequest(t, req)
 		rec := httptest.NewRecorder()
 		ds.router.ServeHTTP(rec, req)
 

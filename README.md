@@ -10,7 +10,7 @@ export PCR_API_TOKENS="my-secret-token"
 ./bin/pcr-server
 ```
 
-The server starts on `:8080` by default. Log in at `http://localhost:8080/login?token=my-secret-token` to access the dashboard.
+The server starts on `:8080` by default. Navigate to `http://localhost:8080/login` and enter your token to access the dashboard.
 
 ## Configuration
 
@@ -30,6 +30,7 @@ All configuration is via environment variables prefixed with `PCR_`.
 | `PCR_DB_BUSY_TIMEOUT` | No | `5s` | SQLite busy/write-lock wait timeout |
 | `PCR_DB_SLOW_QUERY_THRESHOLD` | No | `100ms` | Log a warning when a query exceeds this |
 | `PCR_SESSION_SECRET` | No | (random) | HMAC key for dashboard session cookies. Set to a stable value so sessions survive restarts |
+| `PCR_COOKIE_SECURE` | No | `true` | Set the `Secure` flag on session cookies (requires HTTPS). Set to `false` for local dev without TLS |
 
 ## API Reference
 
@@ -59,8 +60,9 @@ The API is append-only. There are no PUT, PATCH, or DELETE endpoints. Events are
 |---|---|---|
 | `GET` | `/` | Dashboard (requires session cookie or token) |
 | `GET` | `/events/{id}` | Event detail page |
-| `POST` | `/events/{id}/star` | Toggle star (redirects back) |
-| `GET` | `/login` | Set session cookie and redirect to dashboard |
+| `POST` | `/events/{id}/star` | Toggle star (redirects back, requires CSRF token) |
+| `GET` | `/login` | Show login form |
+| `POST` | `/login` | Submit token, set session cookie, redirect to dashboard |
 
 ### Query parameters for `GET /api/v1/events`
 
@@ -269,7 +271,7 @@ Both requests return the same event (same `id`, same `created_at`). The second r
 
 ## Dashboard
 
-The built-in HTML dashboard is served at `/`. Authenticate by visiting `/login?token=my-secret-token` — this sets a session cookie and redirects to the dashboard. The cookie is valid for 24 hours. It provides:
+The built-in HTML dashboard is served at `/`. Authenticate by navigating to `/login` and entering your API token in the form — this sets a session cookie and redirects to the dashboard. The cookie is valid for 24 hours. It provides:
 
 - Time range buttons to filter events by predefined windows (last 5 minutes, 30 minutes, 1 hour, and 24 hours)
 - Clickable tags that filter the event list to matching events
@@ -365,9 +367,15 @@ Authentication is performed via one of three methods (checked in this order):
 
 ### Dashboard login
 
-Browse to `/login?token=your-token`. The server validates the token, sets an HttpOnly session cookie (`pcr_session`, 24-hour expiry, SameSite=Lax), and redirects to `/`. All subsequent dashboard requests use the cookie — no token appears in URLs, browser history, or Referer headers.
+Navigate to `/login` to see the login form. Submit your API token via the form — the token is sent as a POST body (never in the URL). The server validates the token, sets an HttpOnly session cookie (`pcr_session`, 24-hour expiry, `SameSite=Lax`, `Secure` when `PCR_COOKIE_SECURE=true`), and redirects to `/`. All subsequent dashboard requests use the cookie — no token appears in URLs, browser history, or Referer headers.
 
-Set `PCR_SESSION_SECRET` to a stable string so sessions survive server restarts. If unset, a random secret is generated (sessions expire on restart).
+Each session cookie contains a unique nonce and creation timestamp, signed with HMAC-SHA256. The server validates both the signature and that the timestamp is within the 24-hour window.
+
+Set `PCR_SESSION_SECRET` to a stable string so sessions survive server restarts. If unset, a random secret is generated (sessions expire on restart). Set `PCR_COOKIE_SECURE=false` when running locally without TLS (default is `true`).
+
+### CSRF protection
+
+Dashboard POST forms (e.g., star toggle) include a CSRF token derived from the session nonce. The server validates this token on every POST request to dashboard endpoints. API clients using Bearer tokens are not affected.
 
 ### Security headers
 

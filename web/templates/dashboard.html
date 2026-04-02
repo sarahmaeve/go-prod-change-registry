@@ -90,6 +90,7 @@ document.getElementById('custom-toggle').addEventListener('click', function(e) {
             <tr class="type-{{.EventType}}{{if .Alerted}} row-alerted{{end}}">
                 <td class="col-status">
                     <form method="POST" action="/events/{{.ID}}/star" class="star-form">
+                        <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
                         <button type="submit" class="star-btn{{if .Starred}} starred{{end}}" title="{{if .Starred}}Unstar{{else}}Star{{end}}">
                             {{if .Starred}}&#9733;{{else}}&#9734;{{end}}
                         </button>

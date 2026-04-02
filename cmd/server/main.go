@@ -17,6 +17,7 @@ import (
 
 	"github.com/sarah/go-prod-change-registry/internal/config"
 	"github.com/sarah/go-prod-change-registry/internal/handler"
+	"github.com/sarah/go-prod-change-registry/internal/middleware"
 	"github.com/sarah/go-prod-change-registry/internal/router"
 	"github.com/sarah/go-prod-change-registry/internal/service"
 	sqlitestore "github.com/sarah/go-prod-change-registry/internal/store/sqlite"
@@ -67,9 +68,12 @@ func main() {
 	// Create service and handlers.
 	svc := service.NewChangeService(store)
 	apiHandler := handler.NewAPIHandler(svc, db)
-	dashHandler := handler.NewDashboardHandler(svc, cfg.DashboardRefreshSec)
+	dashHandler := handler.NewDashboardHandler(svc, cfg.DashboardRefreshSec, cfg.SessionSecret)
 
-	loginHandler := handler.NewLoginHandler(cfg.APITokens, cfg.SessionSecret)
+	loginHandler := handler.NewLoginHandler(cfg.APITokens, middleware.SessionOptions{
+		Secret: cfg.SessionSecret,
+		Secure: cfg.CookieSecure,
+	})
 
 	// Create router and HTTP server.
 	r := router.New(apiHandler, dashHandler, loginHandler, cfg)

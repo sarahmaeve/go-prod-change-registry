@@ -1,0 +1,15 @@
+{{define "content"}}
+<div class="login-page">
+    <h2>Login</h2>
+    {{if .Error}}<p class="error-message">{{.Error}}</p>{{end}}
+    <form method="POST" action="/login" class="login-form">
+        <div class="filter-group">
+            <label for="token">API Token</label>
+            <input type="password" id="token" name="token" required placeholder="Enter your API token">
+        </div>
+        <div class="filter-actions">
+            <button type="submit">Login</button>
+        </div>
+    </form>
+</div>
+{{end}}

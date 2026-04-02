@@ -15,7 +15,7 @@ no PUT or DELETE endpoints. Status changes (star, alert) are recorded as
 
 ```bash
 make build
-PCR_API_TOKENS=test-token PCR_SESSION_SECRET=my-test-secret ./bin/pcr-server
+PCR_API_TOKENS=test-token PCR_SESSION_SECRET=my-test-secret PCR_COOKIE_SECURE=false ./bin/pcr-server
 ```
 
 The server listens on `:8080` by default. Override with `PCR_ADDR`.
@@ -255,19 +255,17 @@ pcr -X POST http://localhost:8080/api/v1/events -d '{
 The dashboard uses cookie-based sessions. Log in by navigating to:
 
 ```
-http://localhost:8080/login?token=test-token
+http://localhost:8080/login
 ```
 
-This validates the token, sets an HttpOnly session cookie, and redirects to
-the dashboard at `/`. You should see the dashboard without any token in the URL.
+Enter your token (`test-token`) in the form and submit. The server validates the
+token via POST (the token is never in the URL), sets an HttpOnly session cookie,
+and redirects to the dashboard at `/`. You should see the dashboard without any
+token in the URL.
 
-To test login failure, try an invalid token:
+To test login failure, enter an invalid token in the form.
 
-```
-http://localhost:8080/login?token=wrong
-```
-
-Expected: 401 Unauthorized.
+Expected: 401 Unauthorized with the login form redisplayed and an error message.
 
 ### Dashboard features
 

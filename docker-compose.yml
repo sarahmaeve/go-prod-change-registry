@@ -11,6 +11,7 @@ services:
       PCR_DATABASE_PATH: /data/registry.db
       PCR_AUTO_MIGRATE: "true"
       PCR_REQUIRE_AUTH_READS: "true"
+      PCR_COOKIE_SECURE: "false"
     restart: unless-stopped
 
 volumes:

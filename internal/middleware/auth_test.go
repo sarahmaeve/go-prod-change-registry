@@ -203,7 +203,7 @@ func TestAuthSessionCookie(t *testing.T) {
 
 		// Create a valid session cookie.
 		cookieRec := httptest.NewRecorder()
-		middleware.SetSessionCookie(cookieRec, sessionSecret)
+		middleware.SetSessionCookie(cookieRec, middleware.SessionOptions{Secret: sessionSecret})
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/events", nil)
 		for _, c := range cookieRec.Result().Cookies() {
@@ -241,7 +241,7 @@ func TestAuthSessionCookie(t *testing.T) {
 
 		// Set a valid cookie (signed with some secret), but middleware has nil secret.
 		cookieRec := httptest.NewRecorder()
-		middleware.SetSessionCookie(cookieRec, sessionSecret)
+		middleware.SetSessionCookie(cookieRec, middleware.SessionOptions{Secret: sessionSecret})
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/events", nil)
 		for _, c := range cookieRec.Result().Cookies() {

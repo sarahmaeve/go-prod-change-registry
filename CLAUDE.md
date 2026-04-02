@@ -47,7 +47,7 @@ When suggesting a code option, you must VERIFY the existence of every API or too
 - `internal/store/sqlite/` — SQLite implementation (WAL mode, busy_timeout, slow query logging)
 - `internal/service/` — Business logic, validation, defaults
 - `internal/handler/` — API handlers (REST/JSON) and dashboard handlers (HTML)
-- `internal/middleware/` — Auth (Bearer token, session cookie, query param token), request logging, request ID
+- `internal/middleware/` — Auth (Bearer token, session cookie, query param token), CSRF protection, session management, request logging, request ID
 - `internal/router/` — Chi router wiring
 - `migrations/` — Embedded SQL migrations (golang-migrate)
 - `web/` — Embedded HTML templates and static CSS
@@ -67,6 +67,8 @@ When suggesting a code option, you must VERIFY the existence of every API or too
 - `GET /api/v1/events/{id}` — Get single event
 - `GET /api/v1/events/{id}/annotations` — Get derived annotation state (starred, alerted)
 - `POST /api/v1/events/{id}/star` — Toggle star (creates star/unstar meta-event)
+- `GET /login` — Show login form
+- `POST /login` — Submit token via form body, set session cookie, redirect to dashboard
 
 ### Key design decisions
 - Append-only: no PUT or DELETE endpoints; all state changes are new events
@@ -74,9 +76,12 @@ When suggesting a code option, you must VERIFY the existence of every API or too
 - SQLite with WAL mode + busy_timeout for concurrent access
 - Slow query threshold logging on all store operations
 - Zero trust auth: all routes require token by default (PCR_REQUIRE_AUTH_READS)
-- Token passed via Bearer header for API clients. Dashboard uses cookie-based sessions (set via /login endpoint). Query param ?token= supported as fallback.
+- Token passed via Bearer header for API clients. Dashboard uses cookie-based sessions (POST /login with form body). Query param ?token= supported as fallback for API.
+- Session cookies contain a per-session nonce + timestamp + HMAC signature; server validates expiry
+- `PCR_COOKIE_SECURE` (default true) controls the Secure flag on session cookies; set false for dev without TLS
+- Dashboard POST forms include CSRF tokens derived from the session nonce
 - Templates parsed separately per page to avoid Go template name collisions
-- Star is toggleable from dashboard (POST form), alert is API-only (create alert meta-event)
+- Star is toggleable from dashboard (POST form with CSRF token), alert is API-only (create alert meta-event)
 - Annotations are derived at query time from the chain of meta-events for a parent
 - Static files served outside auth middleware
 

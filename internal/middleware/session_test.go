@@ -1,13 +1,15 @@
 package middleware_test
 
 import (
-	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/sarah/go-prod-change-registry/internal/middleware"
 )
+
+var testOpts = middleware.SessionOptions{Secret: []byte("test-secret"), Secure: false}
 
 func TestSetSessionCookie(t *testing.T) {
 	t.Parallel()
@@ -16,19 +18,9 @@ func TestSetSessionCookie(t *testing.T) {
 		t.Parallel()
 
 		rec := httptest.NewRecorder()
-		middleware.SetSessionCookie(rec, []byte("test-secret"))
+		middleware.SetSessionCookie(rec, testOpts)
 
-		cookies := rec.Result().Cookies()
-		var found *http.Cookie
-		for _, c := range cookies {
-			if c.Name == middleware.SessionCookieName {
-				found = c
-				break
-			}
-		}
-		if found == nil {
-			t.Fatal("expected cookie with name pcr_session, got none")
-		}
+		found := findCookie(t, rec, middleware.SessionCookieName)
 		if !found.HttpOnly {
 			t.Error("expected HttpOnly to be true")
 		}
@@ -44,44 +36,71 @@ func TestSetSessionCookie(t *testing.T) {
 		if found.Value == "" {
 			t.Error("expected non-empty cookie value")
 		}
-		if _, err := hex.DecodeString(found.Value); err != nil {
-			t.Errorf("cookie value %q is not valid hex: %v", found.Value, err)
+		// Value format: nonce:timestamp:signature
+		parts := strings.SplitN(found.Value, ":", 3)
+		if len(parts) != 3 {
+			t.Fatalf("expected cookie value with 3 colon-separated parts, got %d: %q", len(parts), found.Value)
+		}
+		for i, p := range parts {
+			if p == "" {
+				t.Errorf("cookie value part %d is empty", i)
+			}
 		}
 	})
 
-	t.Run("value is deterministic for same secret", func(t *testing.T) {
+	t.Run("Secure flag controlled by options", func(t *testing.T) {
 		t.Parallel()
 
-		secret := []byte("deterministic-secret")
+		secureOpts := middleware.SessionOptions{Secret: []byte("s"), Secure: true}
+		rec := httptest.NewRecorder()
+		middleware.SetSessionCookie(rec, secureOpts)
+		found := findCookie(t, rec, middleware.SessionCookieName)
+		if !found.Secure {
+			t.Error("expected Secure to be true when opts.Secure is true")
+		}
+
+		insecureOpts := middleware.SessionOptions{Secret: []byte("s"), Secure: false}
+		rec2 := httptest.NewRecorder()
+		middleware.SetSessionCookie(rec2, insecureOpts)
+		found2 := findCookie(t, rec2, middleware.SessionCookieName)
+		if found2.Secure {
+			t.Error("expected Secure to be false when opts.Secure is false")
+		}
+	})
+
+	t.Run("each call generates a unique nonce", func(t *testing.T) {
+		t.Parallel()
 
 		rec1 := httptest.NewRecorder()
-		middleware.SetSessionCookie(rec1, secret)
-
+		middleware.SetSessionCookie(rec1, testOpts)
 		rec2 := httptest.NewRecorder()
-		middleware.SetSessionCookie(rec2, secret)
+		middleware.SetSessionCookie(rec2, testOpts)
 
-		val1 := cookieValue(t, rec1, middleware.SessionCookieName)
-		val2 := cookieValue(t, rec2, middleware.SessionCookieName)
+		val1 := findCookie(t, rec1, middleware.SessionCookieName).Value
+		val2 := findCookie(t, rec2, middleware.SessionCookieName).Value
 
-		if val1 != val2 {
-			t.Errorf("same secret produced different values: %q vs %q", val1, val2)
+		if val1 == val2 {
+			t.Error("two calls produced identical cookie values — nonce should be random")
 		}
 	})
 
 	t.Run("value differs for different secrets", func(t *testing.T) {
 		t.Parallel()
 
+		optsA := middleware.SessionOptions{Secret: []byte("secret-a")}
+		optsB := middleware.SessionOptions{Secret: []byte("secret-b")}
+
 		rec1 := httptest.NewRecorder()
-		middleware.SetSessionCookie(rec1, []byte("secret-a"))
-
+		middleware.SetSessionCookie(rec1, optsA)
 		rec2 := httptest.NewRecorder()
-		middleware.SetSessionCookie(rec2, []byte("secret-b"))
+		middleware.SetSessionCookie(rec2, optsB)
 
-		val1 := cookieValue(t, rec1, middleware.SessionCookieName)
-		val2 := cookieValue(t, rec2, middleware.SessionCookieName)
+		// Extract just the signature part (3rd field) — nonces will differ anyway
+		sig1 := strings.SplitN(findCookie(t, rec1, middleware.SessionCookieName).Value, ":", 3)[2]
+		sig2 := strings.SplitN(findCookie(t, rec2, middleware.SessionCookieName).Value, ":", 3)[2]
 
-		if val1 == val2 {
-			t.Error("different secrets produced identical cookie values")
+		if sig1 == sig2 {
+			t.Error("different secrets produced identical signatures")
 		}
 	})
 }
@@ -90,12 +109,13 @@ func TestValidateSessionCookie(t *testing.T) {
 	t.Parallel()
 
 	secret := []byte("validate-test-secret")
+	opts := middleware.SessionOptions{Secret: secret}
 
 	t.Run("accepts cookie set by SetSessionCookie", func(t *testing.T) {
 		t.Parallel()
 
 		rec := httptest.NewRecorder()
-		middleware.SetSessionCookie(rec, secret)
+		middleware.SetSessionCookie(rec, opts)
 
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		for _, c := range rec.Result().Cookies() {
@@ -127,11 +147,23 @@ func TestValidateSessionCookie(t *testing.T) {
 		}
 	})
 
+	t.Run("rejects malformed cookie missing parts", func(t *testing.T) {
+		t.Parallel()
+
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.AddCookie(&http.Cookie{Name: middleware.SessionCookieName, Value: "onlyonepart"})
+
+		if middleware.ValidateSessionCookie(req, secret) {
+			t.Error("expected false for cookie with no colons")
+		}
+	})
+
 	t.Run("rejects cookie signed with different secret", func(t *testing.T) {
 		t.Parallel()
 
+		optsA := middleware.SessionOptions{Secret: []byte("secret-A")}
 		rec := httptest.NewRecorder()
-		middleware.SetSessionCookie(rec, []byte("secret-A"))
+		middleware.SetSessionCookie(rec, optsA)
 
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		for _, c := range rec.Result().Cookies() {
@@ -139,7 +171,75 @@ func TestValidateSessionCookie(t *testing.T) {
 		}
 
 		if middleware.ValidateSessionCookie(req, []byte("secret-B")) {
-			t.Error("expected ValidateSessionCookie to return false when validated with a different secret")
+			t.Error("expected false when validated with a different secret")
+		}
+	})
+}
+
+func TestCSRFToken(t *testing.T) {
+	t.Parallel()
+
+	secret := []byte("csrf-test-secret")
+	opts := middleware.SessionOptions{Secret: secret}
+
+	t.Run("roundtrip: generate then validate", func(t *testing.T) {
+		t.Parallel()
+
+		rec := httptest.NewRecorder()
+		middleware.SetSessionCookie(rec, opts)
+
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		for _, c := range rec.Result().Cookies() {
+			req.AddCookie(c)
+		}
+
+		nonce := middleware.SessionNonce(req)
+		if nonce == "" {
+			t.Fatal("expected non-empty nonce from session cookie")
+		}
+
+		token := middleware.GenerateCSRFToken(secret, nonce)
+		if token == "" {
+			t.Fatal("expected non-empty CSRF token")
+		}
+
+		if !middleware.ValidateCSRFToken(secret, nonce, token) {
+			t.Error("expected CSRF token to validate")
+		}
+	})
+
+	t.Run("rejects empty nonce", func(t *testing.T) {
+		t.Parallel()
+
+		if middleware.ValidateCSRFToken(secret, "", "some-token") {
+			t.Error("expected false for empty nonce")
+		}
+	})
+
+	t.Run("rejects empty token", func(t *testing.T) {
+		t.Parallel()
+
+		if middleware.ValidateCSRFToken(secret, "some-nonce", "") {
+			t.Error("expected false for empty token")
+		}
+	})
+
+	t.Run("rejects wrong token", func(t *testing.T) {
+		t.Parallel()
+
+		nonce := "test-nonce-value"
+		if middleware.ValidateCSRFToken(secret, nonce, "wrong-token") {
+			t.Error("expected false for wrong token")
+		}
+	})
+
+	t.Run("rejects token from different secret", func(t *testing.T) {
+		t.Parallel()
+
+		nonce := "test-nonce-value"
+		token := middleware.GenerateCSRFToken([]byte("secret-A"), nonce)
+		if middleware.ValidateCSRFToken([]byte("secret-B"), nonce, token) {
+			t.Error("expected false for token generated with different secret")
 		}
 	})
 }
@@ -150,17 +250,7 @@ func TestClearSessionCookie(t *testing.T) {
 	rec := httptest.NewRecorder()
 	middleware.ClearSessionCookie(rec)
 
-	cookies := rec.Result().Cookies()
-	var found *http.Cookie
-	for _, c := range cookies {
-		if c.Name == middleware.SessionCookieName {
-			found = c
-			break
-		}
-	}
-	if found == nil {
-		t.Fatal("expected cookie with name pcr_session")
-	}
+	found := findCookie(t, rec, middleware.SessionCookieName)
 	if found.MaxAge != -1 {
 		t.Errorf("MaxAge = %d, want -1", found.MaxAge)
 	}
@@ -169,14 +259,14 @@ func TestClearSessionCookie(t *testing.T) {
 	}
 }
 
-// cookieValue extracts a cookie's value from a recorder by name.
-func cookieValue(t *testing.T, rec *httptest.ResponseRecorder, name string) string {
+// findCookie extracts a cookie from a recorder by name, failing if not found.
+func findCookie(t *testing.T, rec *httptest.ResponseRecorder, name string) *http.Cookie {
 	t.Helper()
 	for _, c := range rec.Result().Cookies() {
 		if c.Name == name {
-			return c.Value
+			return c
 		}
 	}
 	t.Fatalf("cookie %q not found", name)
-	return ""
+	return nil
 }

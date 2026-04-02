@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -16,7 +17,7 @@ func TestLoad(t *testing.T) {
 		t.Helper()
 		for _, key := range []string{
 			"PCR_ADDR", "PCR_DATABASE_PATH", "PCR_SESSION_SECRET",
-			"PCR_REQUIRE_AUTH_READS", "PCR_AUTO_MIGRATE",
+			"PCR_COOKIE_SECURE", "PCR_REQUIRE_AUTH_READS", "PCR_AUTO_MIGRATE",
 			"PCR_DASHBOARD_REFRESH_SEC", "PCR_READ_TIMEOUT",
 			"PCR_WRITE_TIMEOUT", "PCR_SHUTDOWN_TIMEOUT",
 			"PCR_DB_BUSY_TIMEOUT", "PCR_DB_SLOW_QUERY_THRESHOLD",
@@ -45,6 +46,9 @@ func TestLoad(t *testing.T) {
 		}
 		if cfg.DatabasePath != "registry.db" {
 			t.Errorf("DatabasePath = %q, want %q", cfg.DatabasePath, "registry.db")
+		}
+		if cfg.CookieSecure != true {
+			t.Errorf("CookieSecure = %v, want true", cfg.CookieSecure)
 		}
 		if cfg.RequireAuthReads != true {
 			t.Errorf("RequireAuthReads = %v, want true", cfg.RequireAuthReads)
@@ -156,10 +160,9 @@ func TestLoad(t *testing.T) {
 	})
 
 	t.Run("PCR_API_TOKENS trims whitespace from individual tokens", func(t *testing.T) {
+		clearOptionalEnv(t)
 		t.Setenv("PCR_API_TOKENS", "  tok1  ,  tok2  ")
 		t.Setenv("PCR_SESSION_SECRET", "s")
-		clearOptionalEnv(t)
-		t.Setenv("PCR_SESSION_SECRET", "s") // re-set after clearOptionalEnv
 
 		cfg, err := config.Load()
 		if err != nil {
@@ -178,6 +181,7 @@ func TestLoad(t *testing.T) {
 	})
 
 	t.Run("invalid bool for PCR_REQUIRE_AUTH_READS returns error", func(t *testing.T) {
+		clearOptionalEnv(t)
 		t.Setenv("PCR_API_TOKENS", "tok1")
 		t.Setenv("PCR_SESSION_SECRET", "s")
 		t.Setenv("PCR_REQUIRE_AUTH_READS", "not-a-bool")
@@ -186,44 +190,53 @@ func TestLoad(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for invalid PCR_REQUIRE_AUTH_READS")
 		}
+		if !strings.Contains(err.Error(), "PCR_REQUIRE_AUTH_READS") {
+			t.Fatalf("expected error about PCR_REQUIRE_AUTH_READS, got: %v", err)
+		}
 	})
 
 	t.Run("invalid bool for PCR_AUTO_MIGRATE returns error", func(t *testing.T) {
+		clearOptionalEnv(t)
 		t.Setenv("PCR_API_TOKENS", "tok1")
 		t.Setenv("PCR_SESSION_SECRET", "s")
-		t.Setenv("PCR_REQUIRE_AUTH_READS", "")
 		t.Setenv("PCR_AUTO_MIGRATE", "not-a-bool")
 
 		_, err := config.Load()
 		if err == nil {
 			t.Fatal("expected error for invalid PCR_AUTO_MIGRATE")
 		}
+		if !strings.Contains(err.Error(), "PCR_AUTO_MIGRATE") {
+			t.Fatalf("expected error about PCR_AUTO_MIGRATE, got: %v", err)
+		}
 	})
 
 	t.Run("invalid int for PCR_DASHBOARD_REFRESH_SEC returns error", func(t *testing.T) {
+		clearOptionalEnv(t)
 		t.Setenv("PCR_API_TOKENS", "tok1")
 		t.Setenv("PCR_SESSION_SECRET", "s")
-		t.Setenv("PCR_REQUIRE_AUTH_READS", "")
-		t.Setenv("PCR_AUTO_MIGRATE", "")
 		t.Setenv("PCR_DASHBOARD_REFRESH_SEC", "abc")
 
 		_, err := config.Load()
 		if err == nil {
 			t.Fatal("expected error for invalid PCR_DASHBOARD_REFRESH_SEC")
 		}
+		if !strings.Contains(err.Error(), "PCR_DASHBOARD_REFRESH_SEC") {
+			t.Fatalf("expected error about PCR_DASHBOARD_REFRESH_SEC, got: %v", err)
+		}
 	})
 
 	t.Run("invalid duration for PCR_READ_TIMEOUT returns error", func(t *testing.T) {
+		clearOptionalEnv(t)
 		t.Setenv("PCR_API_TOKENS", "tok1")
 		t.Setenv("PCR_SESSION_SECRET", "s")
-		t.Setenv("PCR_REQUIRE_AUTH_READS", "")
-		t.Setenv("PCR_AUTO_MIGRATE", "")
-		t.Setenv("PCR_DASHBOARD_REFRESH_SEC", "")
 		t.Setenv("PCR_READ_TIMEOUT", "not-a-duration")
 
 		_, err := config.Load()
 		if err == nil {
 			t.Fatal("expected error for invalid PCR_READ_TIMEOUT")
+		}
+		if !strings.Contains(err.Error(), "PCR_READ_TIMEOUT") {
+			t.Fatalf("expected error about PCR_READ_TIMEOUT, got: %v", err)
 		}
 	})
 

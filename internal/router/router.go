@@ -29,7 +29,8 @@ func New(apiHandler *handler.APIHandler, dashHandler *handler.DashboardHandler, 
 	staticFS := http.FileServerFS(web.StaticFS)
 	r.Handle("/static/*", staticFS)
 	r.Get("/api/v1/health", apiHandler.HealthCheck)
-	r.Get("/login", loginHandler.Login)
+	r.Get("/login", loginHandler.ShowLoginForm)
+	r.Post("/login", loginHandler.Login)
 
 	// All remaining routes require authentication.
 	r.Group(func(r chi.Router) {
