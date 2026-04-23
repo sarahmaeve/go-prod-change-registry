@@ -6,9 +6,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strconv"
-	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/sarah/go-prod-change-registry/internal/model"
@@ -101,87 +98,10 @@ func (h *APIHandler) GetEventAnnotations(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *APIHandler) ListEvents(w http.ResponseWriter, r *http.Request) {
-	var params model.ListParams
-	q := r.URL.Query()
-
-	if v := q.Get("start_after"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_parameter", "start_after must be RFC3339 format")
-			return
-		}
-		params.StartAfter = &t
-	}
-
-	if v := q.Get("start_before"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_parameter", "start_before must be RFC3339 format")
-			return
-		}
-		params.StartBefore = &t
-	}
-
-	if v := q.Get("around"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_parameter", "around must be RFC3339 format")
-			return
-		}
-		params.Around = &t
-
-		windowStr := q.Get("window")
-		if windowStr == "" {
-			windowStr = "30m"
-		}
-		d, err := time.ParseDuration(windowStr)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_parameter", "window must be a valid duration (e.g., 30m, 1h)")
-			return
-		}
-		params.Window = &d
-	}
-
-	params.UserName = q.Get("user")
-	params.EventType = q.Get("type")
-
-	if q.Get("top_level") == "true" {
-		params.TopLevel = true
-	}
-
-	if q.Get("alerted") == "true" {
-		params.AlertedOnly = true
-	}
-
-	// Parse tag filters.
-	for _, tv := range q["tag"] {
-		if k, v, ok := strings.Cut(tv, ":"); ok && k != "" {
-			if params.Tags == nil {
-				params.Tags = make(map[string]string)
-			}
-			params.Tags[k] = v
-		} else {
-			writeError(w, http.StatusBadRequest, "invalid_parameter", "tag must be in key:value format")
-			return
-		}
-	}
-
-	if v := q.Get("limit"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_parameter", "limit must be an integer")
-			return
-		}
-		params.Limit = n
-	}
-
-	if v := q.Get("offset"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_parameter", "offset must be an integer")
-			return
-		}
-		params.Offset = n
+	params, perr := parseListParams(r.URL.Query())
+	if perr != nil {
+		writeError(w, http.StatusBadRequest, perr.code, perr.message)
+		return
 	}
 
 	result, err := h.svc.List(r.Context(), params)

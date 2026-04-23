@@ -210,6 +210,21 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
+	t.Run("invalid bool for PCR_COOKIE_SECURE returns error", func(t *testing.T) {
+		clearOptionalEnv(t)
+		t.Setenv("PCR_API_TOKENS", "tok1")
+		t.Setenv("PCR_SESSION_SECRET", "s")
+		t.Setenv("PCR_COOKIE_SECURE", "not-a-bool")
+
+		_, err := config.Load()
+		if err == nil {
+			t.Fatal("expected error for invalid PCR_COOKIE_SECURE")
+		}
+		if !strings.Contains(err.Error(), "PCR_COOKIE_SECURE") {
+			t.Fatalf("expected error about PCR_COOKIE_SECURE, got: %v", err)
+		}
+	})
+
 	t.Run("invalid int for PCR_DASHBOARD_REFRESH_SEC returns error", func(t *testing.T) {
 		clearOptionalEnv(t)
 		t.Setenv("PCR_API_TOKENS", "tok1")

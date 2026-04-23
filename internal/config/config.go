@@ -31,12 +31,12 @@ type Config struct {
 // It returns an error if required values are missing or malformed.
 func Load() (*Config, error) {
 	cfg := &Config{
-		Addr:                envOrDefault("PCR_ADDR", ":8080"),
-		DatabasePath:        envOrDefault("PCR_DATABASE_PATH", "registry.db"),
-		CookieSecure:        true,
-		RequireAuthReads:    true,
-		AutoMigrate:         true,
-		DashboardRefreshSec: 60,
+		Addr:                 envOrDefault("PCR_ADDR", ":8080"),
+		DatabasePath:         envOrDefault("PCR_DATABASE_PATH", "registry.db"),
+		CookieSecure:         true,
+		RequireAuthReads:     true,
+		AutoMigrate:          true,
+		DashboardRefreshSec:  60,
 		ReadTimeout:          5 * time.Second,
 		WriteTimeout:         10 * time.Second,
 		ShutdownTimeout:      15 * time.Second,
@@ -44,118 +44,88 @@ func Load() (*Config, error) {
 		DBSlowQueryThreshold: 100 * time.Millisecond,
 	}
 
-	// PCR_API_TOKENS — required, comma-separated.
-	tokensRaw := os.Getenv("PCR_API_TOKENS")
-	if tokensRaw == "" {
-		return nil, fmt.Errorf("PCR_API_TOKENS is required but not set")
+	if err := loadAPITokens(cfg); err != nil {
+		return nil, err
 	}
-	tokens := make([]string, 0)
-	for _, t := range strings.Split(tokensRaw, ",") {
-		t = strings.TrimSpace(t)
-		if t != "" {
-			tokens = append(tokens, t)
-		}
-	}
-	cfg.APITokens = tokens
-	if len(cfg.APITokens) == 0 {
-		return nil, fmt.Errorf("PCR_API_TOKENS contains no valid tokens")
+	if err := loadSessionSecret(cfg); err != nil {
+		return nil, err
 	}
 
-	// PCR_SESSION_SECRET — required for dashboard cookie sessions.
-	// If not set, generate a random secret (sessions won't survive restarts).
-	if v := os.Getenv("PCR_SESSION_SECRET"); v != "" {
-		cfg.SessionSecret = []byte(v)
-	} else {
-		secret := make([]byte, 32)
-		if _, err := rand.Read(secret); err != nil {
-			return nil, fmt.Errorf("generate session secret: %w", err)
-		}
-		cfg.SessionSecret = secret
-		slog.Warn("PCR_SESSION_SECRET not set, using ephemeral secret (sessions will not survive restarts)")
-	}
-
-	// PCR_REQUIRE_AUTH_READS
-	if v := os.Getenv("PCR_REQUIRE_AUTH_READS"); v != "" {
-		b, err := strconv.ParseBool(v)
+	for _, err := range []error{
+		optionalEnv("PCR_REQUIRE_AUTH_READS", strconv.ParseBool, &cfg.RequireAuthReads),
+		optionalEnv("PCR_AUTO_MIGRATE", strconv.ParseBool, &cfg.AutoMigrate),
+		optionalEnv("PCR_COOKIE_SECURE", strconv.ParseBool, &cfg.CookieSecure),
+		optionalEnv("PCR_DASHBOARD_REFRESH_SEC", strconv.Atoi, &cfg.DashboardRefreshSec),
+		optionalEnv("PCR_READ_TIMEOUT", time.ParseDuration, &cfg.ReadTimeout),
+		optionalEnv("PCR_WRITE_TIMEOUT", time.ParseDuration, &cfg.WriteTimeout),
+		optionalEnv("PCR_SHUTDOWN_TIMEOUT", time.ParseDuration, &cfg.ShutdownTimeout),
+		optionalEnv("PCR_DB_BUSY_TIMEOUT", time.ParseDuration, &cfg.DBBusyTimeout),
+		optionalEnv("PCR_DB_SLOW_QUERY_THRESHOLD", time.ParseDuration, &cfg.DBSlowQueryThreshold),
+	} {
 		if err != nil {
-			return nil, fmt.Errorf("PCR_REQUIRE_AUTH_READS: %w", err)
+			return nil, err
 		}
-		cfg.RequireAuthReads = b
-	}
-
-	// PCR_AUTO_MIGRATE
-	if v := os.Getenv("PCR_AUTO_MIGRATE"); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err != nil {
-			return nil, fmt.Errorf("PCR_AUTO_MIGRATE: %w", err)
-		}
-		cfg.AutoMigrate = b
-	}
-
-	// PCR_COOKIE_SECURE — set to false for dev without TLS (default true).
-	if v := os.Getenv("PCR_COOKIE_SECURE"); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err != nil {
-			return nil, fmt.Errorf("PCR_COOKIE_SECURE: %w", err)
-		}
-		cfg.CookieSecure = b
-	}
-
-	// PCR_DASHBOARD_REFRESH_SEC
-	if v := os.Getenv("PCR_DASHBOARD_REFRESH_SEC"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			return nil, fmt.Errorf("PCR_DASHBOARD_REFRESH_SEC: %w", err)
-		}
-		cfg.DashboardRefreshSec = n
-	}
-
-	// PCR_READ_TIMEOUT
-	if v := os.Getenv("PCR_READ_TIMEOUT"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return nil, fmt.Errorf("PCR_READ_TIMEOUT: %w", err)
-		}
-		cfg.ReadTimeout = d
-	}
-
-	// PCR_WRITE_TIMEOUT
-	if v := os.Getenv("PCR_WRITE_TIMEOUT"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return nil, fmt.Errorf("PCR_WRITE_TIMEOUT: %w", err)
-		}
-		cfg.WriteTimeout = d
-	}
-
-	// PCR_SHUTDOWN_TIMEOUT
-	if v := os.Getenv("PCR_SHUTDOWN_TIMEOUT"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return nil, fmt.Errorf("PCR_SHUTDOWN_TIMEOUT: %w", err)
-		}
-		cfg.ShutdownTimeout = d
-	}
-
-	// PCR_DB_BUSY_TIMEOUT — how long SQLite waits for a write lock (default 5s).
-	if v := os.Getenv("PCR_DB_BUSY_TIMEOUT"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return nil, fmt.Errorf("PCR_DB_BUSY_TIMEOUT: %w", err)
-		}
-		cfg.DBBusyTimeout = d
-	}
-
-	// PCR_DB_SLOW_QUERY_THRESHOLD — log a warning when a store operation exceeds this (default 100ms).
-	if v := os.Getenv("PCR_DB_SLOW_QUERY_THRESHOLD"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return nil, fmt.Errorf("PCR_DB_SLOW_QUERY_THRESHOLD: %w", err)
-		}
-		cfg.DBSlowQueryThreshold = d
 	}
 
 	return cfg, nil
+}
+
+// loadAPITokens reads PCR_API_TOKENS (required, comma-separated) and writes
+// the trimmed, non-empty tokens onto cfg. Returns an error if the var is
+// unset or contains no valid tokens.
+func loadAPITokens(cfg *Config) error {
+	raw := os.Getenv("PCR_API_TOKENS")
+	if raw == "" {
+		return fmt.Errorf("PCR_API_TOKENS is required but not set")
+	}
+
+	parts := strings.Split(raw, ",")
+	tokens := make([]string, 0, len(parts))
+	for _, t := range parts {
+		if trimmed := strings.TrimSpace(t); trimmed != "" {
+			tokens = append(tokens, trimmed)
+		}
+	}
+	if len(tokens) == 0 {
+		return fmt.Errorf("PCR_API_TOKENS contains no valid tokens")
+	}
+
+	cfg.APITokens = tokens
+	return nil
+}
+
+// loadSessionSecret reads PCR_SESSION_SECRET or generates a random 32-byte
+// secret when unset. Generated secrets are ephemeral — sessions will not
+// survive restarts, which we log loudly so operators notice in production.
+func loadSessionSecret(cfg *Config) error {
+	if v := os.Getenv("PCR_SESSION_SECRET"); v != "" {
+		cfg.SessionSecret = []byte(v)
+		return nil
+	}
+
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return fmt.Errorf("generate session secret: %w", err)
+	}
+	cfg.SessionSecret = secret
+	slog.Warn("PCR_SESSION_SECRET not set, using ephemeral secret (sessions will not survive restarts)")
+	return nil
+}
+
+// optionalEnv reads an env var and, when set, parses it with parse and writes
+// the result to dest. Returns nil when the var is unset or empty. Parse errors
+// are wrapped with the env var name so callers get actionable messages.
+func optionalEnv[T any](key string, parse func(string) (T, error), dest *T) error {
+	v := os.Getenv(key)
+	if v == "" {
+		return nil
+	}
+	parsed, err := parse(v)
+	if err != nil {
+		return fmt.Errorf("%s: %w", key, err)
+	}
+	*dest = parsed
+	return nil
 }
 
 func envOrDefault(key, fallback string) string {
