@@ -94,16 +94,30 @@ func loadAPITokens(cfg *Config) error {
 	return nil
 }
 
+// minSessionSecretBytes is the minimum length accepted for PCR_SESSION_SECRET.
+// The server HMAC-signs session cookies and CSRF tokens with this key, so a
+// short secret weakens both. 32 bytes matches the length of the auto-generated
+// fallback and gives SHA-256 HMAC a full-strength key.
+const minSessionSecretBytes = 32
+
 // loadSessionSecret reads PCR_SESSION_SECRET or generates a random 32-byte
 // secret when unset. Generated secrets are ephemeral — sessions will not
 // survive restarts, which we log loudly so operators notice in production.
+// Explicit secrets shorter than minSessionSecretBytes are rejected to keep
+// production HMAC signatures at full strength.
 func loadSessionSecret(cfg *Config) error {
 	if v := os.Getenv("PCR_SESSION_SECRET"); v != "" {
+		if len(v) < minSessionSecretBytes {
+			return fmt.Errorf(
+				"PCR_SESSION_SECRET must be at least %d bytes; got %d",
+				minSessionSecretBytes, len(v),
+			)
+		}
 		cfg.SessionSecret = []byte(v)
 		return nil
 	}
 
-	secret := make([]byte, 32)
+	secret := make([]byte, minSessionSecretBytes)
 	if _, err := rand.Read(secret); err != nil {
 		return fmt.Errorf("generate session secret: %w", err)
 	}

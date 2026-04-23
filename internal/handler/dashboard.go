@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sort"
@@ -133,12 +134,14 @@ func (h *DashboardHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.svc.List(r.Context(), params)
 	if err != nil {
+		slog.ErrorContext(r.Context(), "dashboard list events error", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	annotations, err := h.fetchAnnotations(r.Context(), result.Events)
 	if err != nil {
+		slog.ErrorContext(r.Context(), "dashboard fetch annotations error", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -166,6 +169,7 @@ func (h *DashboardHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.dashboardTmpl.ExecuteTemplate(w, "layout", data); err != nil {
+		slog.ErrorContext(r.Context(), "dashboard template execute error", "error", err)
 		http.Error(w, "Template error", http.StatusInternalServerError)
 	}
 }
@@ -210,12 +214,14 @@ func (h *DashboardHandler) Detail(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Event not found", http.StatusNotFound)
 			return
 		}
+		slog.ErrorContext(r.Context(), "detail get event error", "error", err, "event_id", id)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	annotations, err := h.svc.GetAnnotations(r.Context(), id)
 	if err != nil {
+		slog.ErrorContext(r.Context(), "detail get annotations error", "error", err, "event_id", id)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -228,6 +234,7 @@ func (h *DashboardHandler) Detail(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.detailTmpl.ExecuteTemplate(w, "layout", data); err != nil {
+		slog.ErrorContext(r.Context(), "detail template execute error", "error", err, "event_id", id)
 		http.Error(w, "Template error", http.StatusInternalServerError)
 	}
 }
@@ -250,6 +257,7 @@ func (h *DashboardHandler) ToggleStar(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Event not found", http.StatusNotFound)
 			return
 		}
+		slog.ErrorContext(r.Context(), "dashboard toggle star error", "error", err, "event_id", id)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}

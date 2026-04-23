@@ -37,6 +37,11 @@ func parseListParams(q url.Values) (model.ListParams, *paramError) {
 
 	p.UserName = q.Get("user")
 	p.EventType = q.Get("type")
+	// Only the literal string "true" is truthy. Other values ("1", "yes",
+	// "True", etc.) are treated as false rather than a 400, for compatibility
+	// with existing links and integrations. Unlike the timestamp and integer
+	// parsers above, this does not reject malformed input — callers relying
+	// on strict parsing should use strconv.ParseBool at the service layer.
 	p.TopLevel = q.Get("top_level") == "true"
 	p.AlertedOnly = q.Get("alerted") == "true"
 

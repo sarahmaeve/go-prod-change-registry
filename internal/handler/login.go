@@ -2,6 +2,7 @@ package handler
 
 import (
 	"html/template"
+	"log/slog"
 	"net/http"
 
 	"github.com/sarah/go-prod-change-registry/internal/middleware"
@@ -46,7 +47,9 @@ type loginData struct {
 // ShowLoginForm renders the login form (GET /login).
 func (h *LoginHandler) ShowLoginForm(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	h.loginFormTmpl.ExecuteTemplate(w, "layout", loginData{})
+	if err := h.loginFormTmpl.ExecuteTemplate(w, "layout", loginData{}); err != nil {
+		slog.ErrorContext(r.Context(), "login form template execute error", "error", err)
+	}
 }
 
 // Login validates a token from the POST form body, sets a session cookie,
@@ -56,7 +59,12 @@ func (h *LoginHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if token == "" || !middleware.ValidateToken([]byte(token), h.validTokens) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusUnauthorized)
-		h.loginFormTmpl.ExecuteTemplate(w, "layout", loginData{Error: "Invalid or missing token"})
+		if err := h.loginFormTmpl.ExecuteTemplate(w, "layout", loginData{Error: "Invalid or missing token"}); err != nil {
+			// The status code has already been written, so there's nothing
+			// left to signal to the client beyond a possibly-truncated
+			// response body. Capture the failure for operators.
+			slog.ErrorContext(r.Context(), "login error-page template execute error", "error", err)
+		}
 		return
 	}
 
