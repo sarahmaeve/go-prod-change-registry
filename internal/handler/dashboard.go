@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"html/template"
@@ -8,7 +9,6 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -129,84 +129,7 @@ var quickRanges = map[string]time.Duration{
 
 // Dashboard handles GET / and renders the event list.
 func (h *DashboardHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
-	var params model.ListParams
-	filters := dashboardFilters{}
-
-	// Dashboard shows only top-level events (not meta-events).
-	params.TopLevel = true
-
-	// Handle time range: quick-select presets or custom datetime range.
-	// Default to last 24 hours when no range is specified.
-	rangeVal := r.URL.Query().Get("range")
-	if rangeVal == "" {
-		rangeVal = "24h"
-	}
-	filters.Range = rangeVal
-
-	if d, ok := quickRanges[rangeVal]; ok {
-		startAfter := time.Now().UTC().Add(-d)
-		params.StartAfter = &startAfter
-	} else if rangeVal == "custom" {
-		if v := r.URL.Query().Get("start_after"); v != "" {
-			filters.StartAfter = v
-			t, err := time.Parse("2006-01-02T15:04", v)
-			if err == nil {
-				params.StartAfter = &t
-			}
-		}
-		if v := r.URL.Query().Get("start_before"); v != "" {
-			filters.StartBefore = v
-			t, err := time.Parse("2006-01-02T15:04", v)
-			if err == nil {
-				params.StartBefore = &t
-			}
-		}
-	}
-
-	if v := r.URL.Query().Get("alerted"); v == "true" {
-		filters.Alerted = true
-		params.AlertedOnly = true
-	}
-
-	if v := r.URL.Query().Get("type"); v != "" {
-		filters.EventType = v
-		params.EventType = v
-	}
-
-	if v := r.URL.Query().Get("user"); v != "" {
-		filters.UserName = v
-		params.UserName = v
-	}
-
-	// Parse tag filters (repeated "tag=key:value" query params).
-	if tagValues := r.URL.Query()["tag"]; len(tagValues) > 0 {
-		tags := make(map[string]string, len(tagValues))
-		for _, tv := range tagValues {
-			if k, v, ok := strings.Cut(tv, ":"); ok && k != "" {
-				tags[k] = v
-				filters.Tags = append(filters.Tags, tv)
-			}
-		}
-		if len(tags) > 0 {
-			params.Tags = tags
-		}
-	}
-
-	limit := model.DashboardLimit
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
-		}
-	}
-	params.Limit = limit
-
-	offset := 0
-	if v := r.URL.Query().Get("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			offset = n
-		}
-	}
-	params.Offset = offset
+	params, filters := parseDashboardRequest(r)
 
 	result, err := h.svc.List(r.Context(), params)
 	if err != nil {
@@ -214,57 +137,67 @@ func (h *DashboardHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Collect event IDs and fetch annotations in batch.
-	eventIDs := make([]string, len(result.Events))
-	for i, ev := range result.Events {
-		eventIDs[i] = ev.ID
-	}
-
-	annotationsMap, err := h.svc.GetAnnotationsBatch(r.Context(), eventIDs)
+	annotations, err := h.fetchAnnotations(r.Context(), result.Events)
 	if err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	// Build dashboard events combining events with their annotations.
-	dashEvents := make([]dashboardEvent, len(result.Events))
-	for i, ev := range result.Events {
-		de := dashboardEvent{ChangeEvent: ev}
-		if ann, ok := annotationsMap[ev.ID]; ok && ann != nil {
-			de.Starred = ann.Starred
-			de.Alerted = ann.Alerted
-		}
-		dashEvents[i] = de
-	}
-
-	offsetStart := offset + 1
+	offsetStart := params.Offset + 1
 	if result.TotalCount == 0 {
 		offsetStart = 0
 	}
-	offsetEnd := offset + len(result.Events)
-
-	csrfToken := middleware.GenerateCSRFToken(h.sessionSecret, middleware.SessionNonce(r))
 
 	data := dashboardData{
 		RefreshSec:  h.refreshSec,
-		CSRFToken:   csrfToken,
-		Events:      dashEvents,
+		CSRFToken:   middleware.GenerateCSRFToken(h.sessionSecret, middleware.SessionNonce(r)),
+		Events:      buildDashboardEvents(result.Events, annotations),
 		Filters:     filters,
 		TotalCount:  result.TotalCount,
 		Limit:       result.Limit,
 		Offset:      result.Offset,
-		HasPrev:     offset > 0,
-		HasNext:     offset+limit < result.TotalCount,
-		PrevURL:     h.paginationURL(r, offset-limit, limit),
-		NextURL:     h.paginationURL(r, offset+limit, limit),
+		HasPrev:     params.Offset > 0,
+		HasNext:     params.Offset+params.Limit < result.TotalCount,
+		PrevURL:     h.paginationURL(r, params.Offset-params.Limit, params.Limit),
+		NextURL:     h.paginationURL(r, params.Offset+params.Limit, params.Limit),
 		OffsetStart: offsetStart,
-		OffsetEnd:   offsetEnd,
+		OffsetEnd:   params.Offset + len(result.Events),
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.dashboardTmpl.ExecuteTemplate(w, "layout", data); err != nil {
 		http.Error(w, "Template error", http.StatusInternalServerError)
 	}
+}
+
+// fetchAnnotations resolves annotations for every event in the slice in a
+// single batch call. Returns an empty map when there are no events, so
+// callers never have to guard the lookup.
+func (h *DashboardHandler) fetchAnnotations(ctx context.Context, events []model.ChangeEvent) (map[string]*model.EventAnnotations, error) {
+	if len(events) == 0 {
+		return map[string]*model.EventAnnotations{}, nil
+	}
+	ids := make([]string, len(events))
+	for i, ev := range events {
+		ids[i] = ev.ID
+	}
+	return h.svc.GetAnnotationsBatch(ctx, ids)
+}
+
+// buildDashboardEvents pairs each event with its annotation state. Events
+// with no annotations (or a nil entry in the map) are returned with
+// Starred/Alerted = false.
+func buildDashboardEvents(events []model.ChangeEvent, annotations map[string]*model.EventAnnotations) []dashboardEvent {
+	out := make([]dashboardEvent, len(events))
+	for i, ev := range events {
+		de := dashboardEvent{ChangeEvent: ev}
+		if ann, ok := annotations[ev.ID]; ok && ann != nil {
+			de.Starred = ann.Starred
+			de.Alerted = ann.Alerted
+		}
+		out[i] = de
+	}
+	return out
 }
 
 // Detail handles GET /events/{id} and renders the event detail page.
