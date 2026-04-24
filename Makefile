@@ -3,7 +3,7 @@ LDFLAGS := -ldflags "-X main.Version=$(VERSION)"
 
 .DEFAULT_GOAL := build
 
-.PHONY: build clean test test-short coverage lint fmt run vet audit
+.PHONY: build clean test test-short coverage lint fmt run vet audit smoke smoke-docker
 
 build:
 	go build $(LDFLAGS) -o bin/pcr-server ./cmd/server
@@ -39,6 +39,20 @@ vet:
 audit:
 	go vet ./...
 	govulncheck ./...
+
+# Smoke / integration tests against a running pcr-server. Two flavours:
+#   make smoke         spawns an ephemeral local server on :18080
+#   make smoke-docker  hits whatever is on :8080 (e.g. `make docker-compose-up` first)
+# Override SMOKE_TOKEN to match PCR_API_TOKENS on the target.
+SMOKE_TOKEN ?= smoke-token-abc
+SMOKE_DOCKER_URL ?= http://localhost:8080
+SMOKE_DOCKER_TOKEN ?= changeme
+
+smoke:
+	go run ./cmd/smoke --start-local --token=$(SMOKE_TOKEN)
+
+smoke-docker:
+	go run ./cmd/smoke --base-url=$(SMOKE_DOCKER_URL) --token=$(SMOKE_DOCKER_TOKEN)
 
 # Docker targets
 .PHONY: docker-build docker-run docker-compose-up docker-compose-down

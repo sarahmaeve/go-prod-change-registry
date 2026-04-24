@@ -10,6 +10,9 @@
 
 bin/
 
+# Stray binaries from `go build ./cmd/<name>` without -o (named after the package dir).
+/smoke
+
 # Test binary, built with `go test -c`
 *.test
 
