@@ -27,14 +27,24 @@ import (
 )
 
 func main() {
-	// Load configuration from environment.
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("failed to load configuration", "error", err)
 		os.Exit(1)
 	}
 
-	// Open the database connection directly.
+	// run owns all deferred cleanup (e.g. db.Close), so errors must surface
+	// here before os.Exit -- otherwise os.Exit would skip the defers.
+	if err := run(cfg); err != nil {
+		slog.Error("server fatal error", "error", err)
+		os.Exit(1)
+	}
+}
+
+// run wires dependencies, starts the server, and blocks until shutdown or
+// fatal error. Returning an error (instead of calling os.Exit) lets deferred
+// resource cleanup -- most importantly db.Close -- complete before exit.
+func run(cfg *config.Config) error {
 	dsn := fmt.Sprintf(
 		"file:%s?_pragma=journal_mode(wal)&_pragma=foreign_keys(on)&_pragma=busy_timeout(%d)",
 		cfg.DatabasePath,
@@ -42,10 +52,13 @@ func main() {
 	)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		slog.Error("failed to open database", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("open database: %w", err)
 	}
-	defer db.Close()
+	defer func() {
+		if cerr := db.Close(); cerr != nil {
+			slog.Error("database close error", "error", cerr)
+		}
+	}()
 
 	slog.Info(
 		"sqlite database opened",
@@ -54,28 +67,21 @@ func main() {
 		"slow_query_threshold", cfg.DBSlowQueryThreshold,
 	)
 
-	// Run migrations if configured.
 	if cfg.AutoMigrate {
 		if err := runMigrations(db); err != nil {
-			slog.Error("failed to run migrations", "error", err)
-			os.Exit(1)
+			return fmt.Errorf("run migrations: %w", err)
 		}
 	}
 
-	// Create SQLite store wrapping the open connection.
 	store := sqlitestore.New(db, cfg.DBSlowQueryThreshold)
-
-	// Create service and handlers.
 	svc := service.NewChangeService(store)
 	apiHandler := handler.NewAPIHandler(svc, db)
 	dashHandler := handler.NewDashboardHandler(svc, cfg.DashboardRefreshSec, cfg.SessionSecret)
-
 	loginHandler := handler.NewLoginHandler(cfg.APITokens, middleware.SessionOptions{
 		Secret: cfg.SessionSecret,
 		Secure: cfg.CookieSecure,
 	})
 
-	// Create router and HTTP server.
 	r := router.New(apiHandler, dashHandler, loginHandler, cfg)
 	srv := &http.Server{
 		Addr:         cfg.Addr,
@@ -84,7 +90,6 @@ func main() {
 		WriteTimeout: cfg.WriteTimeout,
 	}
 
-	// Graceful shutdown handling.
 	shutdownCh := make(chan os.Signal, 1)
 	signal.Notify(shutdownCh, syscall.SIGINT, syscall.SIGTERM)
 
@@ -103,11 +108,11 @@ func main() {
 	slog.Info("starting server", "addr", cfg.Addr)
 
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		slog.Error("server exited with error", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("server exited with error: %w", err)
 	}
 
 	slog.Info("server stopped gracefully")
+	return nil
 }
 
 // runMigrations applies database migrations from the embedded filesystem.
