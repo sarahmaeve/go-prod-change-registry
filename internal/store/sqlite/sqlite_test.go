@@ -1,6 +1,6 @@
 //go:build integration
 
-package sqlite
+package sqlite_test
 
 import (
 	"context"
@@ -14,6 +14,7 @@ import (
 
 	"github.com/sarah/go-prod-change-registry/internal/model"
 	"github.com/sarah/go-prod-change-registry/internal/store"
+	"github.com/sarah/go-prod-change-registry/internal/store/sqlite"
 	"github.com/sarah/go-prod-change-registry/migrations"
 
 	_ "modernc.org/sqlite"
@@ -26,6 +27,7 @@ import (
 // applyTestMigrations reads and executes the embedded migration SQL files in order.
 func applyTestMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
+	ctx := t.Context()
 	migrationFiles := []string{
 		"001_create_change_events.up.sql",
 		"002_add_external_id.up.sql",
@@ -35,7 +37,7 @@ func applyTestMigrations(t *testing.T, db *sql.DB) {
 		if err != nil {
 			t.Fatalf("read migration %s: %v", name, err)
 		}
-		if _, err := db.Exec(string(sqlBytes)); err != nil {
+		if _, err := db.ExecContext(ctx, string(sqlBytes)); err != nil {
 			t.Fatalf("apply migration %s: %v", name, err)
 		}
 	}
@@ -54,13 +56,17 @@ func openTestDB(t *testing.T, dbPath string) *sql.DB {
 	return db
 }
 
-func newTestStore(t *testing.T) *Store {
+func newTestStore(t *testing.T) *sqlite.Store {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	db := openTestDB(t, dbPath)
 	applyTestMigrations(t, db)
-	s := New(db, 100*time.Millisecond)
-	t.Cleanup(func() { db.Close() })
+	s := sqlite.New(db, 100*time.Millisecond)
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("db close: %v", err)
+		}
+	})
 	return s
 }
 
@@ -233,7 +239,7 @@ func TestCreate(t *testing.T) {
 			t.Errorf("LongDescription = %q, want empty", got.LongDescription)
 		}
 		// Tags can be nil or empty when none set.
-		if got.Tags != nil && len(got.Tags) != 0 {
+		if len(got.Tags) != 0 {
 			t.Errorf("len(Tags) = %d, want 0", len(got.Tags))
 		}
 	})
@@ -448,7 +454,7 @@ func TestGetByID(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // seedEvents inserts a known set of events for list tests and returns them.
-func seedEvents(t *testing.T, s *Store) []model.ChangeEvent {
+func seedEvents(t *testing.T, s *sqlite.Store) []model.ChangeEvent {
 	t.Helper()
 	ctx := context.Background()
 

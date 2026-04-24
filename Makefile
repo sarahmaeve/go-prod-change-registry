@@ -24,7 +24,7 @@ coverage:
 	open coverage.html
 
 lint:
-	golangci-lint run ./...
+	golangci-lint run --build-tags=integration ./...
 
 fmt:
 	gofmt -w .
