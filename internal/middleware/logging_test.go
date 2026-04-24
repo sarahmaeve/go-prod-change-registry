@@ -32,11 +32,13 @@ func withCapturedLog(buf *bytes.Buffer, fn func()) {
 	fn()
 }
 
-func TestLogger(t *testing.T) {
-	// Note: these subtests are NOT marked parallel because they mutate
-	// the global slog default logger via withCapturedLog.
-
-	t.Run("request is logged with correct fields", func(t *testing.T) {
+// Subtests in TestLogger are intentionally serial: withCapturedLog mutates
+// the global slog default logger, which is process-wide state. Running
+// these in parallel would interleave captured log output across subtests.
+// Each //nolint:paralleltest below documents this constraint at the call
+// site for the linter.
+func TestLogger(t *testing.T) { //nolint:paralleltest // see file comment: subtests share global slog default
+	t.Run("request is logged with correct fields", func(t *testing.T) { //nolint:paralleltest // see file comment
 		var buf bytes.Buffer
 
 		handler := middleware.Logger()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -72,7 +74,7 @@ func TestLogger(t *testing.T) {
 		}
 	})
 
-	t.Run("status code is captured correctly", func(t *testing.T) {
+	t.Run("status code is captured correctly", func(t *testing.T) { //nolint:paralleltest // see file comment
 		var buf bytes.Buffer
 
 		handler := middleware.Logger()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -99,7 +101,7 @@ func TestLogger(t *testing.T) {
 		}
 	})
 
-	t.Run("5xx status is logged at error level", func(t *testing.T) {
+	t.Run("5xx status is logged at error level", func(t *testing.T) { //nolint:paralleltest // see file comment
 		var buf bytes.Buffer
 
 		handler := middleware.Logger()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -126,7 +128,7 @@ func TestLogger(t *testing.T) {
 		}
 	})
 
-	t.Run("Write without explicit WriteHeader defaults to 200", func(t *testing.T) {
+	t.Run("Write without explicit WriteHeader defaults to 200", func(t *testing.T) { //nolint:paralleltest // see file comment
 		var buf bytes.Buffer
 
 		handler := middleware.Logger()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -153,7 +155,7 @@ func TestLogger(t *testing.T) {
 		}
 	})
 
-	t.Run("double WriteHeader only records the first status", func(t *testing.T) {
+	t.Run("double WriteHeader only records the first status", func(t *testing.T) { //nolint:paralleltest // see file comment
 		var buf bytes.Buffer
 
 		handler := middleware.Logger()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

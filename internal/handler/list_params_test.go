@@ -1,4 +1,4 @@
-package handler
+package handler //nolint:testpackage // white-box tests cover unexported parseListParams and friends which have no public API to test through
 
 import (
 	"net/url"

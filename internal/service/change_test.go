@@ -1,4 +1,4 @@
-package service
+package service_test
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/sarah/go-prod-change-registry/internal/model"
+	"github.com/sarah/go-prod-change-registry/internal/service"
 	"github.com/sarah/go-prod-change-registry/internal/store"
 )
 
@@ -84,7 +85,7 @@ func TestCreate(t *testing.T) {
 				return &cp, nil
 			},
 		}
-		svc := NewChangeService(ms)
+		svc := service.NewChangeService(ms)
 
 		req := &model.CreateChangeRequest{
 			UserName:        "alice",
@@ -144,14 +145,14 @@ func TestCreate(t *testing.T) {
 		t.Parallel()
 
 		ms := &mockStore{} // no createFn -- store should not be called
-		svc := NewChangeService(ms)
+		svc := service.NewChangeService(ms)
 
 		_, err := svc.Create(context.Background(), &model.CreateChangeRequest{
 			EventType:   model.EventTypeDeployment,
 			Description: "oops",
 		})
-		if !errors.Is(err, ErrUserNameRequired) {
-			t.Fatalf("got error %v, want %v", err, ErrUserNameRequired)
+		if !errors.Is(err, service.ErrUserNameRequired) {
+			t.Fatalf("got error %v, want %v", err, service.ErrUserNameRequired)
 		}
 	})
 
@@ -159,14 +160,14 @@ func TestCreate(t *testing.T) {
 		t.Parallel()
 
 		ms := &mockStore{} // no createFn -- store should not be called
-		svc := NewChangeService(ms)
+		svc := service.NewChangeService(ms)
 
 		_, err := svc.Create(context.Background(), &model.CreateChangeRequest{
 			UserName:    "alice",
 			Description: "oops",
 		})
-		if !errors.Is(err, ErrEventTypeRequired) {
-			t.Fatalf("got error %v, want %v", err, ErrEventTypeRequired)
+		if !errors.Is(err, service.ErrEventTypeRequired) {
+			t.Fatalf("got error %v, want %v", err, service.ErrEventTypeRequired)
 		}
 	})
 
@@ -192,7 +193,7 @@ func TestCreate(t *testing.T) {
 				return &cp, nil
 			},
 		}
-		svc := NewChangeService(ms)
+		svc := service.NewChangeService(ms)
 
 		got, err := svc.Create(context.Background(), &model.CreateChangeRequest{
 			ParentID:  "parent-1",
@@ -218,15 +219,15 @@ func TestCreate(t *testing.T) {
 				return nil, nil // parent not found
 			},
 		}
-		svc := NewChangeService(ms)
+		svc := service.NewChangeService(ms)
 
 		_, err := svc.Create(context.Background(), &model.CreateChangeRequest{
 			ParentID:  "nonexistent",
 			UserName:  "bob",
 			EventType: model.EventTypeStar,
 		})
-		if !errors.Is(err, ErrParentNotFound) {
-			t.Fatalf("got error %v, want %v", err, ErrParentNotFound)
+		if !errors.Is(err, service.ErrParentNotFound) {
+			t.Fatalf("got error %v, want %v", err, service.ErrParentNotFound)
 		}
 	})
 
@@ -240,7 +241,7 @@ func TestCreate(t *testing.T) {
 				return &cp, nil
 			},
 		}
-		svc := NewChangeService(ms)
+		svc := service.NewChangeService(ms)
 
 		got, err := svc.Create(context.Background(), &model.CreateChangeRequest{
 			UserName:  "carol",
@@ -266,7 +267,7 @@ func TestCreate(t *testing.T) {
 				return &cp, nil
 			},
 		}
-		svc := NewChangeService(ms)
+		svc := service.NewChangeService(ms)
 
 		got, err := svc.Create(context.Background(), &model.CreateChangeRequest{
 			UserName:  "bob",
@@ -304,7 +305,7 @@ func TestGetByID(t *testing.T) {
 				return want, nil
 			},
 		}
-		svc := NewChangeService(ms)
+		svc := service.NewChangeService(ms)
 
 		got, err := svc.GetByID(context.Background(), "evt-123")
 		if err != nil {
@@ -323,11 +324,11 @@ func TestGetByID(t *testing.T) {
 				return nil, nil
 			},
 		}
-		svc := NewChangeService(ms)
+		svc := service.NewChangeService(ms)
 
 		_, err := svc.GetByID(context.Background(), "missing")
-		if !errors.Is(err, ErrEventNotFound) {
-			t.Fatalf("got error %v, want %v", err, ErrEventNotFound)
+		if !errors.Is(err, service.ErrEventNotFound) {
+			t.Fatalf("got error %v, want %v", err, service.ErrEventNotFound)
 		}
 	})
 
@@ -340,7 +341,7 @@ func TestGetByID(t *testing.T) {
 				return nil, storeErr
 			},
 		}
-		svc := NewChangeService(ms)
+		svc := service.NewChangeService(ms)
 
 		_, err := svc.GetByID(context.Background(), "evt-123")
 		if !errors.Is(err, storeErr) {
@@ -383,7 +384,7 @@ func TestList(t *testing.T) {
 				}, nil
 			},
 		}
-		svc := NewChangeService(ms)
+		svc := service.NewChangeService(ms)
 
 		result, err := svc.List(context.Background(), input)
 		if err != nil {
@@ -436,7 +437,7 @@ func TestList(t *testing.T) {
 					return &model.ListResult{}, nil
 				},
 			}
-			svc := NewChangeService(ms)
+			svc := service.NewChangeService(ms)
 
 			_, err := svc.List(context.Background(), model.ListParams{Limit: tt.input})
 			if err != nil {
@@ -457,7 +458,7 @@ func TestList(t *testing.T) {
 				return nil, storeErr
 			},
 		}
-		svc := NewChangeService(ms)
+		svc := service.NewChangeService(ms)
 
 		_, err := svc.List(context.Background(), model.ListParams{Limit: 10})
 		if !errors.Is(err, storeErr) {
@@ -495,7 +496,7 @@ func TestToggleStar(t *testing.T) {
 				return &cp, nil
 			},
 		}
-		svc := NewChangeService(ms)
+		svc := service.NewChangeService(ms)
 
 		got, err := svc.ToggleStar(context.Background(), "evt-1", "bob")
 		if err != nil {
@@ -541,7 +542,7 @@ func TestToggleStar(t *testing.T) {
 				return &cp, nil
 			},
 		}
-		svc := NewChangeService(ms)
+		svc := service.NewChangeService(ms)
 
 		got, err := svc.ToggleStar(context.Background(), "evt-2", "bob")
 		if err != nil {
@@ -567,11 +568,11 @@ func TestToggleStar(t *testing.T) {
 				return nil, nil
 			},
 		}
-		svc := NewChangeService(ms)
+		svc := service.NewChangeService(ms)
 
 		_, err := svc.ToggleStar(context.Background(), "nonexistent", "bob")
-		if !errors.Is(err, ErrEventNotFound) {
-			t.Fatalf("got error %v, want %v", err, ErrEventNotFound)
+		if !errors.Is(err, service.ErrEventNotFound) {
+			t.Fatalf("got error %v, want %v", err, service.ErrEventNotFound)
 		}
 	})
 
@@ -584,7 +585,7 @@ func TestToggleStar(t *testing.T) {
 				return nil, storeErr
 			},
 		}
-		svc := NewChangeService(ms)
+		svc := service.NewChangeService(ms)
 
 		_, err := svc.ToggleStar(context.Background(), "evt-1", "bob")
 		if !errors.Is(err, storeErr) {
@@ -611,7 +612,7 @@ func TestCreateExternalID(t *testing.T) {
 				return &cp, nil
 			},
 		}
-		svc := NewChangeService(ms)
+		svc := service.NewChangeService(ms)
 
 		req := &model.CreateChangeRequest{
 			ExternalID:  "gh-actions-run-999",
@@ -649,7 +650,7 @@ func TestCreateExternalID(t *testing.T) {
 				return existing, store.ErrDuplicate
 			},
 		}
-		svc := NewChangeService(ms)
+		svc := service.NewChangeService(ms)
 
 		got, err := svc.Create(context.Background(), &model.CreateChangeRequest{
 			ExternalID: "dup-key-1",

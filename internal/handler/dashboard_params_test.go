@@ -1,4 +1,4 @@
-package handler
+package handler //nolint:testpackage // white-box tests cover unexported request-parsing helpers (parseDashboardRequest, parseDashboardRange, parseDashboardTags, parseBoundedInt, buildDashboardEvents) which have no public API to test through
 
 import (
 	"net/http/httptest"
