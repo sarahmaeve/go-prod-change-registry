@@ -35,130 +35,147 @@ func (h *APIHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 		slog.ErrorContext(r.Context(), "health check failed: database unreachable", "error", err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(map[string]string{
+		if encErr := json.NewEncoder(w).Encode(map[string]string{
 			"status": "unhealthy",
 			"reason": "database unreachable",
-		})
+		}); encErr != nil {
+			slog.ErrorContext(r.Context(), "health check response encode error", "error", encErr)
+		}
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(r.Context(), w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (h *APIHandler) CreateEvent(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	defer r.Body.Close()
+	// Close errors here are unactionable -- the request is over either way.
+	defer func() { _ = r.Body.Close() }()
+
+	ctx := r.Context()
 
 	var req model.CreateChangeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		if err.Error() == "http: request body too large" {
-			writeError(w, http.StatusRequestEntityTooLarge, "body_too_large", "request body exceeds 1MB limit")
+			writeError(ctx, w, http.StatusRequestEntityTooLarge, "body_too_large", "request body exceeds 1MB limit")
 			return
 		}
-		writeError(w, http.StatusBadRequest, "invalid_body", "invalid JSON request body")
+		writeError(ctx, w, http.StatusBadRequest, "invalid_body", "invalid JSON request body")
 		return
 	}
 
-	event, err := h.svc.Create(r.Context(), &req)
+	event, err := h.svc.Create(ctx, &req)
 	if errors.Is(err, store.ErrDuplicate) {
-		writeJSON(w, http.StatusOK, event)
+		writeJSON(ctx, w, http.StatusOK, event)
 		return
 	}
 	if err != nil {
-		mapServiceError(w, err)
+		mapServiceError(ctx, w, err)
 		return
 	}
 
 	w.Header().Set("Location", "/api/v1/events/"+event.ID)
-	writeJSON(w, http.StatusCreated, event)
+	writeJSON(ctx, w, http.StatusCreated, event)
 }
 
 func (h *APIHandler) GetEvent(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	ctx := r.Context()
 
-	event, err := h.svc.GetByID(r.Context(), id)
+	event, err := h.svc.GetByID(ctx, id)
 	if err != nil {
-		mapServiceError(w, err)
+		mapServiceError(ctx, w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, event)
+	writeJSON(ctx, w, http.StatusOK, event)
 }
 
 func (h *APIHandler) GetEventAnnotations(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	ctx := r.Context()
 
-	annotations, err := h.svc.GetAnnotations(r.Context(), id)
+	annotations, err := h.svc.GetAnnotations(ctx, id)
 	if err != nil {
-		mapServiceError(w, err)
+		mapServiceError(ctx, w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, annotations)
+	writeJSON(ctx, w, http.StatusOK, annotations)
 }
 
 func (h *APIHandler) ListEvents(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
 	params, perr := parseListParams(r.URL.Query())
 	if perr != nil {
-		writeError(w, http.StatusBadRequest, perr.code, perr.message)
+		writeError(ctx, w, http.StatusBadRequest, perr.code, perr.message)
 		return
 	}
 
-	result, err := h.svc.List(r.Context(), params)
+	result, err := h.svc.List(ctx, params)
 	if err != nil {
-		slog.ErrorContext(r.Context(), "list events error", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "an internal error occurred")
+		slog.ErrorContext(ctx, "list events error", "error", err)
+		writeError(ctx, w, http.StatusInternalServerError, "internal_error", "an internal error occurred")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, result)
+	writeJSON(ctx, w, http.StatusOK, result)
 }
 
 func (h *APIHandler) ToggleStar(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	ctx := r.Context()
 
 	// Use a default user name for API star toggles.
 	userName := "api"
 
-	metaEvent, err := h.svc.ToggleStar(r.Context(), id, userName)
+	metaEvent, err := h.svc.ToggleStar(ctx, id, userName)
 	if err != nil {
-		mapServiceError(w, err)
+		mapServiceError(ctx, w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, metaEvent)
+	writeJSON(ctx, w, http.StatusCreated, metaEvent)
 }
 
 // mapServiceError maps service-layer errors to HTTP responses.
-func mapServiceError(w http.ResponseWriter, err error) {
+func mapServiceError(ctx context.Context, w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, service.ErrUserNameRequired):
-		writeError(w, http.StatusBadRequest, "validation_error", "user_name is required")
+		writeError(ctx, w, http.StatusBadRequest, "validation_error", "user_name is required")
 	case errors.Is(err, service.ErrEventTypeRequired):
-		writeError(w, http.StatusBadRequest, "validation_error", "event_type is required")
+		writeError(ctx, w, http.StatusBadRequest, "validation_error", "event_type is required")
 	case errors.Is(err, service.ErrEventNotFound):
-		writeError(w, http.StatusNotFound, "not_found", "event not found")
+		writeError(ctx, w, http.StatusNotFound, "not_found", "event not found")
 	case errors.Is(err, service.ErrParentNotFound):
-		writeError(w, http.StatusBadRequest, "validation_error", "parent event not found")
+		writeError(ctx, w, http.StatusBadRequest, "validation_error", "parent event not found")
 	default:
-		slog.Error("internal error", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "an internal error occurred")
+		slog.ErrorContext(ctx, "internal error", "error", err)
+		writeError(ctx, w, http.StatusInternalServerError, "internal_error", "an internal error occurred")
 	}
 }
 
-func writeJSON(w http.ResponseWriter, status int, data any) {
+// writeJSON encodes data as a JSON response. If encoding fails after the
+// status header has been committed there is nothing useful to send to the
+// client, so the failure is logged for operators.
+func writeJSON(ctx context.Context, w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		slog.ErrorContext(ctx, "json response encode error", "error", err, "status", status)
+	}
 }
 
-func writeError(w http.ResponseWriter, status int, code, message string) {
+func writeError(ctx context.Context, w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"error": map[string]string{
 			"code":    code,
 			"message": message,
 		},
-	})
+	}); err != nil {
+		slog.ErrorContext(ctx, "json error response encode error", "error", err, "status", status, "code", code)
+	}
 }

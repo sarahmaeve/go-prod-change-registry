@@ -1,8 +1,10 @@
 package middleware
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 )
@@ -57,7 +59,7 @@ func Auth(tokens []string, requireForReads bool, sessionSecret []byte) func(http
 				return
 			}
 
-			writeAuthError(w, "missing or malformed Authorization header")
+			writeAuthError(r.Context(), w, "missing or malformed Authorization header")
 		})
 	}
 }
@@ -97,8 +99,10 @@ func extractBearerToken(r *http.Request) string {
 	return ""
 }
 
-// writeAuthError sends a 401 JSON error response.
-func writeAuthError(w http.ResponseWriter, message string) {
+// writeAuthError sends a 401 JSON error response. Encode failures are
+// logged but not surfaced to the client -- the status header is already
+// committed by then.
+func writeAuthError(ctx context.Context, w http.ResponseWriter, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
 
@@ -108,5 +112,7 @@ func writeAuthError(w http.ResponseWriter, message string) {
 			Message: message,
 		},
 	}
-	_ = json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.ErrorContext(ctx, "auth error response encode error", "error", err)
+	}
 }

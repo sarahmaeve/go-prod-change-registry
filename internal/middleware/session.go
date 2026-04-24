@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -121,7 +120,8 @@ func ClearSessionCookie(w http.ResponseWriter) {
 // signSession computes HMAC-SHA256 over the concatenated parts.
 func signSession(secret []byte, parts ...string) string {
 	mac := hmac.New(sha256.New, secret)
-	fmt.Fprint(mac, strings.Join(parts, ":"))
+	// hash.Hash.Write is documented never to return an error; the discard is safe.
+	_, _ = mac.Write([]byte(strings.Join(parts, ":")))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 

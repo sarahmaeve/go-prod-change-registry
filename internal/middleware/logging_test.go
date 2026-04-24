@@ -130,7 +130,7 @@ func TestLogger(t *testing.T) {
 		var buf bytes.Buffer
 
 		handler := middleware.Logger()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Write([]byte("hello"))
+			_, _ = w.Write([]byte("hello"))
 		}))
 
 		req := httptest.NewRequest(http.MethodGet, "/implicit-200", nil)

@@ -262,7 +262,7 @@ func TestSecurityHeaders(t *testing.T) {
 	var called bool
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})
 	handler := middleware.SecurityHeaders()(inner)
 
