@@ -55,7 +55,11 @@ func (h *LoginHandler) ShowLoginForm(w http.ResponseWriter, r *http.Request) {
 // Login validates a token from the POST form body, sets a session cookie,
 // and redirects to the dashboard.
 func (h *LoginHandler) Login(w http.ResponseWriter, r *http.Request) {
-	token := r.FormValue("token")
+	if !parseBoundedPostForm(w, r) {
+		return
+	}
+	// Body already bounded and parsed by parseBoundedPostForm above.
+	token := r.PostFormValue("token") //nolint:gosec // G120: body size limit applied via parseBoundedPostForm
 	if token == "" || !middleware.ValidateToken([]byte(token), h.validTokens) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusUnauthorized)

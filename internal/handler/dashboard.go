@@ -241,9 +241,14 @@ func (h *DashboardHandler) Detail(w http.ResponseWriter, r *http.Request) {
 
 // ToggleStar handles POST /events/{id}/star -- posts a meta-event and redirects back.
 func (h *DashboardHandler) ToggleStar(w http.ResponseWriter, r *http.Request) {
-	// Validate CSRF token from form submission.
+	if !parseBoundedPostForm(w, r) {
+		return
+	}
+
+	// Validate CSRF token from form submission. Body already bounded and
+	// parsed by parseBoundedPostForm above.
 	nonce := middleware.SessionNonce(r)
-	csrfToken := r.FormValue("csrf_token")
+	csrfToken := r.PostFormValue("csrf_token") //nolint:gosec // G120: body size limit applied via parseBoundedPostForm
 	if !middleware.ValidateCSRFToken(h.sessionSecret, nonce, csrfToken) {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return

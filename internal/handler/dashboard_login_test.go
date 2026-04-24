@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +62,8 @@ func newDashboardTestStack() *dashboardStack {
 }
 
 // addCSRFToRequest creates a valid session cookie and CSRF form body for POST tests.
+// The CSRF token is written into the request body as application/x-www-form-urlencoded
+// so it survives ParseForm -- mirroring how real browsers submit dashboard forms.
 func addCSRFToRequest(t *testing.T, req *http.Request) {
 	t.Helper()
 	opts := middleware.SessionOptions{Secret: dashboardSessionSecret}
@@ -72,12 +76,11 @@ func addCSRFToRequest(t *testing.T, req *http.Request) {
 	// Extract nonce from the cookie value (first colon-separated part).
 	parts := strings.SplitN(nonce, ":", 3)
 	csrfToken := middleware.GenerateCSRFToken(dashboardSessionSecret, parts[0])
-	// Set form value for csrf_token.
+
+	body := url.Values{"csrf_token": {csrfToken}}.Encode()
+	req.Body = io.NopCloser(strings.NewReader(body))
+	req.ContentLength = int64(len(body))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Body = http.NoBody
-	req.Form = map[string][]string{
-		"csrf_token": {csrfToken},
-	}
 }
 
 // ---------- LoginHandler ----------
@@ -184,6 +187,27 @@ func TestLogin(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("oversized form body rejected with 413", func(t *testing.T) {
+		t.Parallel()
+
+		ls := newLoginTestStack([]string{"valid-token-1"}, loginOpts)
+		// Body well above the 8 KiB cap; the auth check must not run.
+		oversized := "token=" + strings.Repeat("a", 16<<10)
+		req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(oversized))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		ls.router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("expected 413, got %d; body: %s", rec.Code, rec.Body.String())
+		}
+		for _, c := range rec.Result().Cookies() {
+			if c.Name == middleware.SessionCookieName {
+				t.Fatal("expected no session cookie when body is rejected")
+			}
+		}
+	})
 }
 
 // ---------- DashboardHandler.Dashboard ----------
