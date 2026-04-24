@@ -21,7 +21,7 @@ make docker-build
 docker run -d --name pcr-server \
   -p 8080:8080 \
   -e PCR_API_TOKENS=my-secret-token \
-  -e PCR_SESSION_SECRET=my-session-key \
+  -e PCR_SESSION_SECRET=replace-with-32-byte-secret-from-openssl-rand \
   -v pcr-data:/data \
   pcr-server
 ```
@@ -76,7 +76,7 @@ PCR_API_TOKENS=my-secret-token docker compose up -d --build
 Or set the env var in a `.env` file (not committed to git):
 ```
 PCR_API_TOKENS=my-secret-token
-PCR_SESSION_SECRET=my-session-key
+PCR_SESSION_SECRET=replace-with-32-byte-secret-from-openssl-rand
 ```
 
 Then just:
@@ -214,7 +214,7 @@ All methods use the same environment variables. Key settings:
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `PCR_API_TOKENS` | Yes | -- | Comma-separated API tokens |
-| `PCR_SESSION_SECRET` | No | (random) | HMAC key for session cookies. Set for persistent sessions across restarts. |
+| `PCR_SESSION_SECRET` | No | (random 32-byte) | HMAC key for session cookies. Must be at least 32 bytes when set; generate via `openssl rand -base64 48`. Set for persistent sessions across restarts. |
 | `PCR_DATABASE_PATH` | No | `registry.db` (binary) / `/data/registry.db` (Docker) | Path to SQLite file |
 | `PCR_AUTO_MIGRATE` | No | `true` | Run schema migrations on startup |
 | `PCR_ADDR` | No | `:8080` | Listen address |

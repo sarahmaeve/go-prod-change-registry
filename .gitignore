@@ -40,3 +40,8 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Local Claude Code project config (instructions, agents, settings).
+# Keep these out of source control so each contributor can have their own.
+CLAUDE.md
+.claude/

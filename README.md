@@ -29,7 +29,7 @@ All configuration is via environment variables prefixed with `PCR_`.
 | `PCR_SHUTDOWN_TIMEOUT` | No | `15s` | Graceful shutdown timeout (Go duration) |
 | `PCR_DB_BUSY_TIMEOUT` | No | `5s` | SQLite busy/write-lock wait timeout |
 | `PCR_DB_SLOW_QUERY_THRESHOLD` | No | `100ms` | Log a warning when a query exceeds this |
-| `PCR_SESSION_SECRET` | No | (random) | HMAC key for dashboard session cookies. Set to a stable value so sessions survive restarts |
+| `PCR_SESSION_SECRET` | No | (random) | HMAC key for dashboard session cookies. **Must be at least 32 bytes if set.** When unset, an ephemeral 32-byte secret is generated; sessions then expire on every restart. See [Production session secret](#production-session-secret) below |
 | `PCR_COOKIE_SECURE` | No | `true` | Set the `Secure` flag on session cookies (requires HTTPS). Set to `false` for local dev without TLS |
 
 ## API Reference
@@ -328,6 +328,56 @@ Three deployment options, from simplest to most production-like:
 | **Kubernetes (kind)** | `kind create cluster` + `kubectl apply -f k8s/` | Testing k8s deployment |
 
 See [docs/deployment.md](docs/deployment.md) for full instructions, including sanity checks for each method.
+
+### Production session secret
+
+`PCR_SESSION_SECRET` is the HMAC key the server uses to sign dashboard session cookies and CSRF tokens. The server enforces a **32-byte minimum** and rejects shorter values at startup.
+
+The shipped Docker artifacts ship with a clearly-named placeholder so the stack starts without env tweaks for local dev:
+
+- `docker-compose.yml` and the `make docker-run` target both default `PCR_SESSION_SECRET` to `dev-default-please-override-in-production` (41 bytes).
+- That string is **not safe for production** -- it's checked into source control. Anyone who reads the repo can forge session cookies against any deployment that accepts the default.
+
+For any deployment beyond a developer laptop, override it. Two pieces:
+
+1. **Generate a strong, random secret** (run once, store it where you store other secrets):
+
+   ```bash
+   openssl rand -base64 48      # >= 32 bytes after base64
+   # or
+   head -c 32 /dev/urandom | base64
+   ```
+
+2. **Inject it via the appropriate channel for your runtime:**
+
+   - **Docker Compose** -- put it in a `.env` file next to `docker-compose.yml`; Compose loads it automatically:
+
+     ```dotenv
+     PCR_API_TOKENS=<your-tokens>
+     PCR_SESSION_SECRET=<paste output of step 1>
+     ```
+
+     Or pass it inline:
+
+     ```bash
+     PCR_API_TOKENS=... PCR_SESSION_SECRET=... docker compose up -d
+     ```
+
+   - **`docker run`** -- pass via `-e` from your shell environment so the value never lands in shell history:
+
+     ```bash
+     export PCR_SESSION_SECRET=<paste output of step 1>
+     docker run --rm -p 8080:8080 \
+       -e PCR_API_TOKENS=... \
+       -e PCR_SESSION_SECRET \
+       -v pcr-data:/data pcr-server
+     ```
+
+   - **Kubernetes** -- store in a `Secret` and reference it from the Deployment via `envFrom` or `valueFrom.secretKeyRef`. The shipped `k8s/secret.yaml` template has placeholders for both `api-tokens` and `session-secret`; fill them with real values before `kubectl apply`. See [docs/deployment.md](docs/deployment.md) for the full Kubernetes walkthrough.
+
+   - **Other orchestrators / hosted environments** -- inject from your platform's secret manager (AWS SSM Parameter Store, GCP Secret Manager, HashiCorp Vault, GitHub Actions secrets, ...) into the container's environment.
+
+Rotating the secret invalidates every existing session and CSRF token; users will need to re-login. Plan rotations during low-traffic windows or coordinate with users.
 
 ## Development
 
