@@ -116,7 +116,7 @@ func TestHealthCheck(t *testing.T) {
 		t.Parallel()
 
 		ts := newTestStack()
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/health", nil)
 		rec := httptest.NewRecorder()
 		ts.router.ServeHTTP(rec, req)
 
@@ -143,7 +143,7 @@ func TestHealthCheck(t *testing.T) {
 		r := chi.NewRouter()
 		r.Get("/api/v1/health", h.HealthCheck)
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/health", nil)
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, req)
 
@@ -185,7 +185,7 @@ func TestCreateEvent(t *testing.T) {
 		}
 
 		payload := `{"user_name":"alice","event_type":"deployment","description":"deploy v1.2"}`
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/events", bytes.NewBufferString(payload))
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBufferString(payload))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		ts.router.ServeHTTP(rec, req)
@@ -220,7 +220,7 @@ func TestCreateEvent(t *testing.T) {
 		ts := newTestStack()
 
 		payload := `{"event_type":"deployment","description":"deploy v1.2"}`
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/events", bytes.NewBufferString(payload))
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBufferString(payload))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		ts.router.ServeHTTP(rec, req)
@@ -248,7 +248,7 @@ func TestCreateEvent(t *testing.T) {
 		ts := newTestStack()
 
 		payload := `{"user_name":"alice","description":"deploy v1.2"}`
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/events", bytes.NewBufferString(payload))
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBufferString(payload))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		ts.router.ServeHTTP(rec, req)
@@ -275,7 +275,7 @@ func TestCreateEvent(t *testing.T) {
 
 		ts := newTestStack()
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/events", bytes.NewBufferString("{invalid"))
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBufferString("{invalid"))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		ts.router.ServeHTTP(rec, req)
@@ -306,7 +306,7 @@ func TestCreateEvent(t *testing.T) {
 		// The key is to have the JSON decoder read past the limit.
 		largeValue := strings.Repeat("a", 1<<20)
 		largeBody := `{"description":"` + largeValue + `"}`
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/events", bytes.NewBufferString(largeBody))
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBufferString(largeBody))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		ts.router.ServeHTTP(rec, req)
@@ -351,7 +351,7 @@ func TestCreateEvent(t *testing.T) {
 		}
 
 		payload := `{"parent_id":"evt-parent-001","user_name":"bob","event_type":"star","description":"starred"}`
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/events", bytes.NewBufferString(payload))
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBufferString(payload))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		ts.router.ServeHTTP(rec, req)
@@ -392,7 +392,7 @@ func TestCreateEvent(t *testing.T) {
 		}
 
 		payload := `{"external_id":"gh-actions-run-555","user_name":"bob","event_type":"deployment","description":"deploy v3.0 retry"}`
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/events", bytes.NewBufferString(payload))
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBufferString(payload))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		ts.router.ServeHTTP(rec, req)
@@ -440,7 +440,7 @@ func TestGetEvent(t *testing.T) {
 			return nil, nil
 		}
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/events/evt-123", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/events/evt-123", nil)
 		rec := httptest.NewRecorder()
 		ts.router.ServeHTTP(rec, req)
 
@@ -469,7 +469,7 @@ func TestGetEvent(t *testing.T) {
 			return nil, nil
 		}
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/events/nonexistent", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/events/nonexistent", nil)
 		rec := httptest.NewRecorder()
 		ts.router.ServeHTTP(rec, req)
 
@@ -510,7 +510,7 @@ func TestListEvents(t *testing.T) {
 			}, nil
 		}
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/events", nil)
 		rec := httptest.NewRecorder()
 		ts.router.ServeHTTP(rec, req)
 
@@ -553,7 +553,7 @@ func TestListEvents(t *testing.T) {
 		before := time.Date(2026, 3, 31, 23, 59, 59, 0, time.UTC)
 		url := "/api/v1/events?start_after=" + after.Format(time.RFC3339) + "&start_before=" + before.Format(time.RFC3339)
 
-		req := httptest.NewRequest(http.MethodGet, url, nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
 		rec := httptest.NewRecorder()
 		ts.router.ServeHTTP(rec, req)
 
@@ -590,7 +590,7 @@ func TestListEvents(t *testing.T) {
 			}, nil
 		}
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/events?user=alice&type=deployment", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/events?user=alice&type=deployment", nil)
 		rec := httptest.NewRecorder()
 		ts.router.ServeHTTP(rec, req)
 
@@ -621,7 +621,7 @@ func TestListEvents(t *testing.T) {
 			}, nil
 		}
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/events?tag=env:prod&tag=region:us-east-1", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/events?tag=env:prod&tag=region:us-east-1", nil)
 		rec := httptest.NewRecorder()
 		ts.router.ServeHTTP(rec, req)
 
@@ -655,7 +655,7 @@ func TestListEvents(t *testing.T) {
 			}, nil
 		}
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/events?limit=10&offset=20", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/events?limit=10&offset=20", nil)
 		rec := httptest.NewRecorder()
 		ts.router.ServeHTTP(rec, req)
 
@@ -694,7 +694,7 @@ func TestListEvents(t *testing.T) {
 			}, nil
 		}
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/events?top_level=true", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/events?top_level=true", nil)
 		rec := httptest.NewRecorder()
 		ts.router.ServeHTTP(rec, req)
 
@@ -720,7 +720,7 @@ func TestListEvents(t *testing.T) {
 
 			ts := newTestStack()
 
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/events?"+tt.query, nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/events?"+tt.query, nil)
 			rec := httptest.NewRecorder()
 			ts.router.ServeHTTP(rec, req)
 
@@ -766,7 +766,7 @@ func TestToggleStar(t *testing.T) {
 			return event, nil
 		}
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/events/evt-parent-star/star", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events/evt-parent-star/star", nil)
 		rec := httptest.NewRecorder()
 		ts.router.ServeHTTP(rec, req)
 
@@ -794,7 +794,7 @@ func TestToggleStar(t *testing.T) {
 			return nil, nil
 		}
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/events/nonexistent/star", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events/nonexistent/star", nil)
 		rec := httptest.NewRecorder()
 		ts.router.ServeHTTP(rec, req)
 
@@ -833,7 +833,7 @@ func TestGetEventAnnotations(t *testing.T) {
 			return nil, nil
 		}
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/events/evt-ann-001/annotations", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/events/evt-ann-001/annotations", nil)
 		rec := httptest.NewRecorder()
 		ts.router.ServeHTTP(rec, req)
 

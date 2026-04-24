@@ -181,10 +181,10 @@ func TestAuthEnforcement(t *testing.T) {
 
 				var req *http.Request
 				if tc.body != "" {
-					req = httptest.NewRequest(tc.method, tc.path, bytes.NewBufferString(tc.body))
+					req = httptest.NewRequestWithContext(t.Context(), tc.method, tc.path, bytes.NewBufferString(tc.body))
 					req.Header.Set("Content-Type", "application/json")
 				} else {
-					req = httptest.NewRequest(tc.method, tc.path, nil)
+					req = httptest.NewRequestWithContext(t.Context(), tc.method, tc.path, nil)
 				}
 
 				rec := httptest.NewRecorder()
@@ -215,7 +215,7 @@ func TestAuthEnforcement(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				t.Parallel()
 
-				req := httptest.NewRequest(tc.method, tc.path, nil)
+				req := httptest.NewRequestWithContext(t.Context(), tc.method, tc.path, nil)
 				req.Header.Set("Authorization", "Bearer "+testToken)
 				rec := httptest.NewRecorder()
 				r.ServeHTTP(rec, req)
@@ -231,7 +231,7 @@ func TestAuthEnforcement(t *testing.T) {
 		t.Parallel()
 
 		r, _ := newTestRouter(t, true)
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/health", nil)
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, req)
 
@@ -245,7 +245,8 @@ func TestAuthEnforcement(t *testing.T) {
 
 		r, _ := newTestRouter(t, true)
 		body := `{"user_name":"sarah","event_type":"deployment","description":"deploy v1.3"}`
-		req := httptest.NewRequest(
+		req := httptest.NewRequestWithContext(
+			t.Context(),
 			http.MethodPost,
 			"/api/v1/events",
 			bytes.NewBufferString(body),
@@ -265,7 +266,7 @@ func TestAuthEnforcement(t *testing.T) {
 		t.Parallel()
 
 		r, _ := newTestRouter(t, true)
-		req := httptest.NewRequest(http.MethodGet, "/?token="+testToken, nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/?token="+testToken, nil)
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, req)
 
@@ -278,7 +279,7 @@ func TestAuthEnforcement(t *testing.T) {
 		t.Parallel()
 
 		r, _ := newTestRouter(t, true)
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/events?token="+testToken, nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/events?token="+testToken, nil)
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, req)
 
@@ -306,7 +307,7 @@ func TestAuthEnforcement(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				t.Parallel()
 
-				req := httptest.NewRequest(tc.method, tc.path, nil)
+				req := httptest.NewRequestWithContext(t.Context(), tc.method, tc.path, nil)
 				if tc.token != "" {
 					req.Header.Set("Authorization", "Bearer "+tc.token)
 				}
@@ -343,7 +344,7 @@ func TestAuthEnforcement(t *testing.T) {
 
 		// Try a POST without auth.
 		body := `{"user_name":"sarah","event_type":"deployment","description":"sneaky deploy"}`
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/events", bytes.NewBufferString(body))
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBufferString(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer wrong-token")
 		rec := httptest.NewRecorder()
@@ -357,7 +358,7 @@ func TestAuthEnforcement(t *testing.T) {
 		}
 
 		// Try a GET without auth.
-		req = httptest.NewRequest(http.MethodGet, "/api/v1/events", nil)
+		req = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/events", nil)
 		rec = httptest.NewRecorder()
 		r.ServeHTTP(rec, req)
 
@@ -373,7 +374,7 @@ func TestAuthEnforcement(t *testing.T) {
 		t.Parallel()
 
 		r, _ := newTestRouter(t, true)
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/events", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", nil)
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, req)
 

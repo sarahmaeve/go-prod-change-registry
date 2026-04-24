@@ -21,7 +21,7 @@ func TestParseDashboardRequest(t *testing.T) {
 	t.Run("default query sets TopLevel and 24h range", func(t *testing.T) {
 		t.Parallel()
 
-		r := httptest.NewRequest("GET", "/", nil)
+		r := httptest.NewRequestWithContext(t.Context(), "GET", "/", nil)
 		p, f := parseDashboardRequest(r)
 
 		if !p.TopLevel {
@@ -44,7 +44,8 @@ func TestParseDashboardRequest(t *testing.T) {
 	t.Run("full custom filter populates params and echoes filters", func(t *testing.T) {
 		t.Parallel()
 
-		r := httptest.NewRequest(
+		r := httptest.NewRequestWithContext(
+			t.Context(),
 			"GET",
 			"/?range=custom"+
 				"&start_after=2026-04-20T10:00"+

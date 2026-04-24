@@ -45,7 +45,7 @@ func TestLogger(t *testing.T) { //nolint:paralleltest // see file comment: subte
 			w.WriteHeader(http.StatusOK)
 		}))
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/changes", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/changes", nil)
 		// Inject a request ID into context so the logger can read it.
 		ctx := context.WithValue(req.Context(), middleware.RequestIDKey, "test-req-id")
 		req = req.WithContext(ctx)
@@ -81,7 +81,7 @@ func TestLogger(t *testing.T) { //nolint:paralleltest // see file comment: subte
 			w.WriteHeader(http.StatusNotFound)
 		}))
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/missing", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/missing", nil)
 		rec := httptest.NewRecorder()
 
 		withCapturedLog(&buf, func() {
@@ -108,7 +108,7 @@ func TestLogger(t *testing.T) { //nolint:paralleltest // see file comment: subte
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/fail", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/fail", nil)
 		rec := httptest.NewRecorder()
 
 		withCapturedLog(&buf, func() {
@@ -135,7 +135,7 @@ func TestLogger(t *testing.T) { //nolint:paralleltest // see file comment: subte
 			_, _ = w.Write([]byte("hello"))
 		}))
 
-		req := httptest.NewRequest(http.MethodGet, "/implicit-200", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/implicit-200", nil)
 		rec := httptest.NewRecorder()
 
 		withCapturedLog(&buf, func() {
@@ -163,7 +163,7 @@ func TestLogger(t *testing.T) { //nolint:paralleltest // see file comment: subte
 			w.WriteHeader(http.StatusInternalServerError) // should be ignored
 		}))
 
-		req := httptest.NewRequest(http.MethodPost, "/double-header", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/double-header", nil)
 		rec := httptest.NewRecorder()
 
 		withCapturedLog(&buf, func() {

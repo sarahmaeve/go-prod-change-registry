@@ -117,7 +117,7 @@ func TestValidateSessionCookie(t *testing.T) {
 		rec := httptest.NewRecorder()
 		middleware.SetSessionCookie(rec, opts)
 
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 		for _, c := range rec.Result().Cookies() {
 			req.AddCookie(c)
 		}
@@ -130,7 +130,7 @@ func TestValidateSessionCookie(t *testing.T) {
 	t.Run("rejects missing cookie", func(t *testing.T) {
 		t.Parallel()
 
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 		if middleware.ValidateSessionCookie(req, secret) {
 			t.Error("expected ValidateSessionCookie to return false with no cookie")
 		}
@@ -139,7 +139,7 @@ func TestValidateSessionCookie(t *testing.T) {
 	t.Run("rejects tampered cookie value", func(t *testing.T) {
 		t.Parallel()
 
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 		req.AddCookie(&http.Cookie{Name: middleware.SessionCookieName, Value: "deadbeef"})
 
 		if middleware.ValidateSessionCookie(req, secret) {
@@ -150,7 +150,7 @@ func TestValidateSessionCookie(t *testing.T) {
 	t.Run("rejects malformed cookie missing parts", func(t *testing.T) {
 		t.Parallel()
 
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 		req.AddCookie(&http.Cookie{Name: middleware.SessionCookieName, Value: "onlyonepart"})
 
 		if middleware.ValidateSessionCookie(req, secret) {
@@ -165,7 +165,7 @@ func TestValidateSessionCookie(t *testing.T) {
 		rec := httptest.NewRecorder()
 		middleware.SetSessionCookie(rec, optsA)
 
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 		for _, c := range rec.Result().Cookies() {
 			req.AddCookie(c)
 		}
@@ -188,7 +188,7 @@ func TestCSRFToken(t *testing.T) {
 		rec := httptest.NewRecorder()
 		middleware.SetSessionCookie(rec, opts)
 
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 		for _, c := range rec.Result().Cookies() {
 			req.AddCookie(c)
 		}

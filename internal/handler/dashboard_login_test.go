@@ -94,7 +94,7 @@ func TestLogin(t *testing.T) {
 		t.Parallel()
 
 		ls := newLoginTestStack([]string{"valid-token-1"}, loginOpts)
-		req := httptest.NewRequest(http.MethodGet, "/login", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/login", nil)
 		rec := httptest.NewRecorder()
 		ls.router.ServeHTTP(rec, req)
 
@@ -111,7 +111,7 @@ func TestLogin(t *testing.T) {
 
 		ls := newLoginTestStack([]string{"valid-token-1"}, loginOpts)
 		body := strings.NewReader("token=valid-token-1")
-		req := httptest.NewRequest(http.MethodPost, "/login", body)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/login", body)
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		rec := httptest.NewRecorder()
 		ls.router.ServeHTTP(rec, req)
@@ -149,7 +149,7 @@ func TestLogin(t *testing.T) {
 
 		ls := newLoginTestStack([]string{"first-token", "second-token"}, loginOpts)
 		body := strings.NewReader("token=second-token")
-		req := httptest.NewRequest(http.MethodPost, "/login", body)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/login", body)
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		rec := httptest.NewRecorder()
 		ls.router.ServeHTTP(rec, req)
@@ -172,7 +172,7 @@ func TestLogin(t *testing.T) {
 			t.Parallel()
 
 			ls := newLoginTestStack([]string{"valid-token-1"}, loginOpts)
-			req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(tc.body))
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/login", strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			rec := httptest.NewRecorder()
 			ls.router.ServeHTTP(rec, req)
@@ -194,7 +194,7 @@ func TestLogin(t *testing.T) {
 		ls := newLoginTestStack([]string{"valid-token-1"}, loginOpts)
 		// Body well above the 8 KiB cap; the auth check must not run.
 		oversized := "token=" + strings.Repeat("a", 16<<10)
-		req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(oversized))
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/login", strings.NewReader(oversized))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		rec := httptest.NewRecorder()
 		ls.router.ServeHTTP(rec, req)
@@ -235,7 +235,7 @@ func TestDashboard(t *testing.T) {
 		ds.store.listFn = emptyListFn
 		ds.store.getAnnotationsBatchFn = emptyAnnotationsBatchFn
 
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 		rec := httptest.NewRecorder()
 		ds.router.ServeHTTP(rec, req)
 
@@ -277,7 +277,7 @@ func TestDashboard(t *testing.T) {
 			}, nil
 		}
 
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 		rec := httptest.NewRecorder()
 		ds.router.ServeHTTP(rec, req)
 
@@ -308,7 +308,7 @@ func TestDashboard(t *testing.T) {
 		}
 		ds.store.getAnnotationsBatchFn = emptyAnnotationsBatchFn
 
-		req := httptest.NewRequest(http.MethodGet, "/?type=deployment&user=alice&range=24h", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/?type=deployment&user=alice&range=24h", nil)
 		rec := httptest.NewRecorder()
 		ds.router.ServeHTTP(rec, req)
 
@@ -337,7 +337,7 @@ func TestDashboard(t *testing.T) {
 		}
 		ds.store.getAnnotationsBatchFn = emptyAnnotationsBatchFn
 
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 		rec := httptest.NewRecorder()
 		ds.router.ServeHTTP(rec, req)
 
@@ -368,7 +368,7 @@ func TestDashboard(t *testing.T) {
 		}
 		ds.store.getAnnotationsBatchFn = emptyAnnotationsBatchFn
 
-		req := httptest.NewRequest(http.MethodGet, "/?range=custom&start_after=2026-01-01T00:00&start_before=2026-01-02T00:00", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/?range=custom&start_after=2026-01-01T00:00&start_before=2026-01-02T00:00", nil)
 		rec := httptest.NewRecorder()
 		ds.router.ServeHTTP(rec, req)
 
@@ -418,7 +418,7 @@ func TestDashboard(t *testing.T) {
 			return map[string]*model.EventAnnotations{}, nil
 		}
 
-		req := httptest.NewRequest(http.MethodGet, "/?offset=40&limit=20", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/?offset=40&limit=20", nil)
 		rec := httptest.NewRecorder()
 		ds.router.ServeHTTP(rec, req)
 
@@ -452,7 +452,7 @@ func TestDashboard(t *testing.T) {
 			return nil, errors.New("database connection lost")
 		}
 
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 		rec := httptest.NewRecorder()
 		ds.router.ServeHTTP(rec, req)
 
@@ -492,7 +492,7 @@ func TestDetail(t *testing.T) {
 			return &model.EventAnnotations{Starred: true, Alerted: false}, nil
 		}
 
-		req := httptest.NewRequest(http.MethodGet, "/events/evt-detail-001", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/events/evt-detail-001", nil)
 		rec := httptest.NewRecorder()
 		ds.router.ServeHTTP(rec, req)
 
@@ -524,7 +524,7 @@ func TestDetail(t *testing.T) {
 			return nil, nil
 		}
 
-		req := httptest.NewRequest(http.MethodGet, "/events/nonexistent", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/events/nonexistent", nil)
 		rec := httptest.NewRecorder()
 		ds.router.ServeHTTP(rec, req)
 
@@ -541,7 +541,7 @@ func TestDetail(t *testing.T) {
 			return nil, errors.New("disk I/O error")
 		}
 
-		req := httptest.NewRequest(http.MethodGet, "/events/evt-err", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/events/evt-err", nil)
 		rec := httptest.NewRecorder()
 		ds.router.ServeHTTP(rec, req)
 
@@ -589,7 +589,7 @@ func TestDashboardToggleStar(t *testing.T) {
 		ds := newDashboardTestStack()
 		setupToggleStarMocks(ds)
 
-		req := httptest.NewRequest(http.MethodPost, "/events/evt-star-001/star", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/events/evt-star-001/star", nil)
 		req.Header.Set("Referer", "/events/evt-star-001")
 		addCSRFToRequest(t, req)
 		rec := httptest.NewRecorder()
@@ -609,7 +609,7 @@ func TestDashboardToggleStar(t *testing.T) {
 		ds := newDashboardTestStack()
 		setupToggleStarMocks(ds)
 
-		req := httptest.NewRequest(http.MethodPost, "/events/evt-star-001/star", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/events/evt-star-001/star", nil)
 		req.Header.Set("Referer", "https://evil.com/phish")
 		addCSRFToRequest(t, req)
 		rec := httptest.NewRecorder()
@@ -630,7 +630,7 @@ func TestDashboardToggleStar(t *testing.T) {
 		ds := newDashboardTestStack()
 		setupToggleStarMocks(ds)
 
-		req := httptest.NewRequest(http.MethodPost, "/events/evt-star-001/star", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/events/evt-star-001/star", nil)
 		addCSRFToRequest(t, req)
 		rec := httptest.NewRecorder()
 		ds.router.ServeHTTP(rec, req)
@@ -649,7 +649,7 @@ func TestDashboardToggleStar(t *testing.T) {
 		ds := newDashboardTestStack()
 		setupToggleStarMocks(ds)
 
-		req := httptest.NewRequest(http.MethodPost, "/events/evt-star-001/star", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/events/evt-star-001/star", nil)
 		rec := httptest.NewRecorder()
 		ds.router.ServeHTTP(rec, req)
 
@@ -666,7 +666,7 @@ func TestDashboardToggleStar(t *testing.T) {
 			return nil, nil
 		}
 
-		req := httptest.NewRequest(http.MethodPost, "/events/nonexistent/star", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/events/nonexistent/star", nil)
 		addCSRFToRequest(t, req)
 		rec := httptest.NewRecorder()
 		ds.router.ServeHTTP(rec, req)

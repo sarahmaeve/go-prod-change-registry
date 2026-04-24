@@ -136,7 +136,7 @@ func TestAuth(t *testing.T) {
 			if tc.queryToken != "" {
 				path += "?token=" + tc.queryToken
 			}
-			req := httptest.NewRequest(tc.method, path, nil)
+			req := httptest.NewRequestWithContext(t.Context(), tc.method, path, nil)
 			if tc.authHeader != "" {
 				req.Header.Set("Authorization", tc.authHeader)
 			}
@@ -155,7 +155,7 @@ func TestAuth(t *testing.T) {
 		mw := middleware.Auth([]string{validToken}, true, nil)
 		srv := mw(okHandler)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/changes", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/changes", nil)
 		rec := httptest.NewRecorder()
 		srv.ServeHTTP(rec, req)
 
@@ -205,7 +205,7 @@ func TestAuthSessionCookie(t *testing.T) {
 		cookieRec := httptest.NewRecorder()
 		middleware.SetSessionCookie(cookieRec, middleware.SessionOptions{Secret: sessionSecret})
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/events", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", nil)
 		for _, c := range cookieRec.Result().Cookies() {
 			req.AddCookie(c)
 		}
@@ -223,7 +223,7 @@ func TestAuthSessionCookie(t *testing.T) {
 		mw := middleware.Auth([]string{"token"}, true, sessionSecret)
 		srv := mw(okHandler)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/events", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", nil)
 		req.AddCookie(&http.Cookie{Name: middleware.SessionCookieName, Value: "invalid-value"})
 		rec := httptest.NewRecorder()
 		srv.ServeHTTP(rec, req)
@@ -243,7 +243,7 @@ func TestAuthSessionCookie(t *testing.T) {
 		cookieRec := httptest.NewRecorder()
 		middleware.SetSessionCookie(cookieRec, middleware.SessionOptions{Secret: sessionSecret})
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/events", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", nil)
 		for _, c := range cookieRec.Result().Cookies() {
 			req.AddCookie(c)
 		}
@@ -266,7 +266,7 @@ func TestSecurityHeaders(t *testing.T) {
 	})
 	handler := middleware.SecurityHeaders()(inner)
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
