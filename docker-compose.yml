@@ -7,7 +7,9 @@ services:
       - pcr-data:/data
     environment:
       PCR_API_TOKENS: "${PCR_API_TOKENS:-changeme}"
-      PCR_SESSION_SECRET: "${PCR_SESSION_SECRET:-docker-dev-secret}"
+      # Dev placeholder; >= 32 bytes so config.loadSessionSecret accepts it.
+      # MUST be overridden in any non-local environment.
+      PCR_SESSION_SECRET: "${PCR_SESSION_SECRET:-dev-default-please-override-in-production}"
       PCR_DATABASE_PATH: /data/registry.db
       PCR_AUTO_MIGRATE: "true"
       PCR_REQUIRE_AUTH_READS: "true"

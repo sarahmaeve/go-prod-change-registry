@@ -63,7 +63,7 @@ docker-build:
 docker-run: docker-build
 	docker run --rm -p 8080:8080 \
 		-e PCR_API_TOKENS=$${PCR_API_TOKENS:-changeme} \
-		-e PCR_SESSION_SECRET=$${PCR_SESSION_SECRET:-docker-dev-secret} \
+		-e PCR_SESSION_SECRET=$${PCR_SESSION_SECRET:-dev-default-please-override-in-production} \
 		-v pcr-data:/data \
 		pcr-server
 
