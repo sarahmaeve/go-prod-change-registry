@@ -98,6 +98,8 @@ func TestCreate(t *testing.T) {
 	t.Parallel()
 
 	t.Run("event with all fields", func(t *testing.T) {
+		t.Parallel()
+
 		s := newTestStore(t)
 		ctx := context.Background()
 
@@ -150,6 +152,8 @@ func TestCreate(t *testing.T) {
 	})
 
 	t.Run("event with tags", func(t *testing.T) {
+		t.Parallel()
+
 		s := newTestStore(t)
 		ctx := context.Background()
 
@@ -172,6 +176,8 @@ func TestCreate(t *testing.T) {
 	})
 
 	t.Run("meta-event with parent_id", func(t *testing.T) {
+		t.Parallel()
+
 		s := newTestStore(t)
 		ctx := context.Background()
 
@@ -206,6 +212,8 @@ func TestCreate(t *testing.T) {
 	})
 
 	t.Run("minimal fields no tags", func(t *testing.T) {
+		t.Parallel()
+
 		s := newTestStore(t)
 		ctx := context.Background()
 
@@ -354,6 +362,8 @@ func TestGetByID(t *testing.T) {
 	t.Parallel()
 
 	t.Run("existing event", func(t *testing.T) {
+		t.Parallel()
+
 		s := newTestStore(t)
 		ctx := context.Background()
 
@@ -381,6 +391,8 @@ func TestGetByID(t *testing.T) {
 	})
 
 	t.Run("non-existent returns nil", func(t *testing.T) {
+		t.Parallel()
+
 		s := newTestStore(t)
 		ctx := context.Background()
 
@@ -394,6 +406,8 @@ func TestGetByID(t *testing.T) {
 	})
 
 	t.Run("event with parent_id", func(t *testing.T) {
+		t.Parallel()
+
 		s := newTestStore(t)
 		ctx := context.Background()
 
@@ -461,6 +475,8 @@ func TestList(t *testing.T) {
 	t.Parallel()
 
 	t.Run("no filters returns all", func(t *testing.T) {
+		t.Parallel()
+
 		s := newTestStore(t)
 		seedEvents(t, s)
 		ctx := context.Background()
@@ -541,6 +557,8 @@ func TestList(t *testing.T) {
 	}
 	for _, tc := range filterCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			s := newTestStore(t)
 			seedEvents(t, s)
 			ctx := context.Background()
@@ -556,6 +574,8 @@ func TestList(t *testing.T) {
 	}
 
 	t.Run("TopLevel excludes meta-events", func(t *testing.T) {
+		t.Parallel()
+
 		s := newTestStore(t)
 		ctx := context.Background()
 
@@ -604,6 +624,8 @@ func TestList(t *testing.T) {
 	})
 
 	t.Run("pagination limit and offset", func(t *testing.T) {
+		t.Parallel()
+
 		s := newTestStore(t)
 		seedEvents(t, s)
 		ctx := context.Background()
@@ -663,6 +685,8 @@ func TestList(t *testing.T) {
 	})
 
 	t.Run("Around and Window query", func(t *testing.T) {
+		t.Parallel()
+
 		s := newTestStore(t)
 		seedEvents(t, s)
 		ctx := context.Background()
@@ -685,6 +709,8 @@ func TestList(t *testing.T) {
 	})
 
 	t.Run("empty store returns empty slice", func(t *testing.T) {
+		t.Parallel()
+
 		s := newTestStore(t)
 		ctx := context.Background()
 
@@ -704,6 +730,8 @@ func TestList(t *testing.T) {
 	})
 
 	t.Run("events have correct tags loaded", func(t *testing.T) {
+		t.Parallel()
+
 		s := newTestStore(t)
 		seedEvents(t, s)
 		ctx := context.Background()
@@ -741,6 +769,8 @@ func TestGetAnnotations(t *testing.T) {
 	t.Parallel()
 
 	t.Run("no annotations returns defaults", func(t *testing.T) {
+		t.Parallel()
+
 		s := newTestStore(t)
 		ctx := context.Background()
 
@@ -763,6 +793,8 @@ func TestGetAnnotations(t *testing.T) {
 	})
 
 	t.Run("star then check Starred is true", func(t *testing.T) {
+		t.Parallel()
+
 		s := newTestStore(t)
 		ctx := context.Background()
 
@@ -798,6 +830,8 @@ func TestGetAnnotations(t *testing.T) {
 	})
 
 	t.Run("star then unstar returns Starred false", func(t *testing.T) {
+		t.Parallel()
+
 		s := newTestStore(t)
 		ctx := context.Background()
 
@@ -843,6 +877,8 @@ func TestGetAnnotations(t *testing.T) {
 	})
 
 	t.Run("alert then check Alerted is true", func(t *testing.T) {
+		t.Parallel()
+
 		s := newTestStore(t)
 		ctx := context.Background()
 
@@ -878,6 +914,8 @@ func TestGetAnnotations(t *testing.T) {
 	})
 
 	t.Run("both star and alert simultaneously", func(t *testing.T) {
+		t.Parallel()
+
 		s := newTestStore(t)
 		ctx := context.Background()
 
@@ -934,6 +972,8 @@ func TestGetAnnotationsBatch(t *testing.T) {
 	t.Parallel()
 
 	t.Run("multiple events with different annotations", func(t *testing.T) {
+		t.Parallel()
+
 		s := newTestStore(t)
 		ctx := context.Background()
 
@@ -1014,6 +1054,8 @@ func TestGetAnnotationsBatch(t *testing.T) {
 	})
 
 	t.Run("empty input returns empty map", func(t *testing.T) {
+		t.Parallel()
+
 		s := newTestStore(t)
 		ctx := context.Background()
 

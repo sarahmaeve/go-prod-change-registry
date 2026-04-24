@@ -26,6 +26,11 @@ type localServer struct {
 	cmd     *exec.Cmd
 	tempDir string
 	logFile *os.File
+	// exited is closed by the Wait() goroutine launched in start() once the
+	// subprocess terminates. Both waitReady and stop consume it: waitReady
+	// to fail-fast if the server dies during startup, stop to know when the
+	// SIGTERM (or SIGKILL fallback) has been reaped.
+	exited chan struct{}
 }
 
 // newLocalServer prepares a server config but does not start it.
@@ -81,6 +86,11 @@ func (s *localServer) start(ctx context.Context) error {
 		return fmt.Errorf("spawn %s: %w", s.binaryPath, err)
 	}
 	s.cmd = cmd
+	s.exited = make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(s.exited)
+	}()
 	return nil
 }
 
@@ -107,12 +117,12 @@ func (s *localServer) waitReady(ctx context.Context, baseURL string) error {
 			}
 		}
 
-		// If the subprocess has already exited, no point in polling further.
-		if s.cmd != nil && s.cmd.ProcessState != nil && s.cmd.ProcessState.Exited() {
-			return fmt.Errorf("server exited before becoming ready; see %s", s.logFile.Name())
-		}
-
+		// Fail fast if the subprocess has already exited — otherwise the
+		// poll loop would burn the full 10s deadline waiting for a server
+		// that's already gone.
 		select {
+		case <-s.exited:
+			return fmt.Errorf("server exited before becoming ready; see %s", s.logFile.Name())
 		case <-deadline.Done():
 			return fmt.Errorf("server did not become ready within 10s; see %s", s.logFile.Name())
 		case <-time.After(150 * time.Millisecond):
@@ -121,17 +131,16 @@ func (s *localServer) waitReady(ctx context.Context, baseURL string) error {
 }
 
 // stop sends SIGTERM, waits up to 5s for graceful shutdown, then SIGKILL.
-// Cleans up the temp DB unless keepData was set.
+// Cleans up the temp DB unless keepData was set. Wait() is owned by the
+// goroutine spawned in start(); we observe termination via s.exited.
 func (s *localServer) stop() {
-	if s.cmd != nil && s.cmd.Process != nil {
+	if s.cmd != nil && s.cmd.Process != nil && s.exited != nil {
 		_ = s.cmd.Process.Signal(syscall.SIGTERM)
-		done := make(chan error, 1)
-		go func() { done <- s.cmd.Wait() }()
 		select {
-		case <-done:
+		case <-s.exited:
 		case <-time.After(5 * time.Second):
 			_ = s.cmd.Process.Kill()
-			<-done
+			<-s.exited
 		}
 	}
 	if s.logFile != nil {
@@ -150,6 +159,7 @@ func (s *localServer) dumpLog(w io.Writer) {
 	}
 	f, err := os.Open(s.logFile.Name())
 	if err != nil {
+		_, _ = fmt.Fprintf(w, "(failed to open server log %s: %v)\n", s.logFile.Name(), err)
 		return
 	}
 	defer func() { _ = f.Close() }()
