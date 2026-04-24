@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"time"
@@ -66,6 +67,16 @@ func (s *Store) logOperation(ctx context.Context, op string, start time.Time, er
 	)
 }
 
+// closeQuiet releases a closer in a deferred call and logs any error at warn
+// level. It exists so callers don't have to choose between dropping Close
+// errors silently (errcheck violation) and inlining the same boilerplate at
+// every defer site. The op label identifies which Store method is closing.
+func closeQuiet(ctx context.Context, op string, c io.Closer) {
+	if err := c.Close(); err != nil {
+		slog.WarnContext(ctx, "store close error", "op", op, "error", err)
+	}
+}
+
 // Create inserts a new change event and its tags within a transaction.
 func (s *Store) Create(ctx context.Context, event *model.ChangeEvent) (result *model.ChangeEvent, err error) {
 	start := time.Now()
@@ -98,7 +109,9 @@ func (s *Store) Create(ctx context.Context, event *model.ChangeEvent) (result *m
 	)
 	if err != nil && event.ExternalID != "" && isUniqueViolation(err) {
 		// Event with this external_id already exists — return it (idempotent).
-		tx.Rollback() //nolint:errcheck
+		// Rollback error is unactionable here; we already have the duplicate-
+		// detection result and are about to return.
+		_ = tx.Rollback()
 		existing, lookupErr := s.GetByExternalID(ctx, event.ExternalID)
 		if lookupErr != nil {
 			return nil, lookupErr
@@ -181,7 +194,7 @@ func (s *Store) List(ctx context.Context, params model.ListParams) (result *mode
 	if err != nil {
 		return nil, fmt.Errorf("list events: %w", err)
 	}
-	defer rows.Close()
+	defer closeQuiet(ctx, "List", rows)
 
 	events := make([]model.ChangeEvent, 0)
 	eventIDs := make([]string, 0)
@@ -232,7 +245,7 @@ func (s *Store) GetAnnotations(ctx context.Context, eventID string) (result *mod
 	if err != nil {
 		return nil, fmt.Errorf("query annotations: %w", err)
 	}
-	defer rows.Close()
+	defer closeQuiet(ctx, "GetAnnotations", rows)
 
 	annotations := &model.EventAnnotations{}
 	starResolved := false
@@ -305,7 +318,7 @@ func (s *Store) GetAnnotationsBatch(ctx context.Context, eventIDs []string) (res
 	if err != nil {
 		return nil, fmt.Errorf("query annotations batch: %w", err)
 	}
-	defer rows.Close()
+	defer closeQuiet(ctx, "GetAnnotationsBatch", rows)
 
 	// Track which annotations have been resolved per parent.
 	type resolvedState struct {
@@ -475,7 +488,7 @@ func insertTags(ctx context.Context, tx *sql.Tx, eventID string, tags map[string
 	if err != nil {
 		return fmt.Errorf("prepare insert tags: %w", err)
 	}
-	defer stmt.Close()
+	defer closeQuiet(ctx, "insertTags", stmt)
 
 	for k, v := range tags {
 		if _, err := stmt.ExecContext(ctx, eventID, k, v); err != nil {
@@ -508,7 +521,7 @@ func (s *Store) loadTagsForEvents(ctx context.Context, ids []string) (map[string
 	if err != nil {
 		return nil, fmt.Errorf("load tags: %w", err)
 	}
-	defer rows.Close()
+	defer closeQuiet(ctx, "loadTagsForEvents", rows)
 
 	result := make(map[string]map[string]string)
 	for rows.Next() {
