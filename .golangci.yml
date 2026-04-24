@@ -1,21 +1,73 @@
+version: "2"
+
 run:
   timeout: 2m
   go: "1.25"
 
 linters:
-  enable:
-    - govet
-    - errcheck
-    - staticcheck
-    - unused
-    - gosimple
-    - ineffassign
-    - gocritic
-    - gofmt
+  # `standard` enables errcheck, govet, ineffassign, staticcheck, unused.
+  # We add to that set; everything else stays off. The opinionated style
+  # linters (wsl, varnamelen, exhaustruct, nlreturn, depguard,
+  # noinlineerr, mnd, lll, tagliatelle, nilnil, err113, wrapcheck,
+  # gochecknoglobals, ...) are deliberately not enabled -- they flag
+  # idiomatic Go code as if it were a bug.
+  default: standard
 
-issues:
-  exclude-dirs:
-    - vendor
-  exclude-files:
-    - ".*_gen\\.go$"
-    - ".*\\.pb\\.go$"
+  enable:
+    # --- Security and correctness ---
+    - gosec              # caught G120 form size, G115 conversion
+    - bodyclose          # require http.Response.Body to be closed
+    - sqlclosecheck      # require sql.Rows / sql.Stmt to be closed
+    - errchkjson         # caught unchecked json.Encoder.Encode in api.go
+    - nilerr             # flag `if err != nil { return nil }` typos
+    - wastedassign       # defensive, low noise
+    - gocritic           # caught exitAfterDefer in cmd/server/main.go
+
+    # --- Test hygiene ---
+    - noctx              # require ctx in httptest.NewRequest et al.
+    - paralleltest       # require t.Parallel() in subtests
+    - testpackage        # prefer black-box test packages
+    - usestdlibvars      # use http.MethodGet, status constants, etc.
+
+    # --- Modernization ---
+    - modernize          # caught HasPrefix+TrimPrefix -> CutPrefix
+
+    # --- Complexity ---
+    # cyclop deliberately omitted: its branch-counting rule penalises
+    # SQL builders and migration code where the branches are inherent
+    # to the domain. funlen and gocognit catch real bloat without that
+    # bias. Existing complexity hotspots in production code carry
+    # //nolint:gocognit annotations with rationale.
+    - funlen
+    - gocognit
+
+    # --- Lint-comment hygiene ---
+    - nolintlint         # require justification on every //nolint directive
+
+  settings:
+    funlen:
+      lines: 80
+      statements: 40
+    gocognit:
+      min-complexity: 15
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+
+  exclusions:
+    paths:
+      - vendor
+      - ".*_gen\\.go$"
+      - ".*\\.pb\\.go$"
+    rules:
+      # Table-driven test functions naturally hit funlen and gocognit
+      # thresholds tuned for production code. The complexity is in the
+      # test data, not the test logic; refactoring usually hurts clarity.
+      - path: "_test\\.go$"
+        linters:
+          - funlen
+          - gocognit
+
+formatters:
+  enable:
+    - gofmt

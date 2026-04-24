@@ -24,6 +24,11 @@ type authErrorDetail struct {
 // session cookies, or query parameter tokens. The tokens slice contains the list of
 // valid tokens. If requireForReads is false, GET and HEAD requests are allowed without
 // authentication. The sessionSecret is used to validate session cookies.
+// Cognitive complexity is in the auth-method fallback chain (bearer header,
+// session cookie, query param) plus the read-vs-write toggle. Each branch
+// is straightforward; consolidating them would obscure the intent.
+//
+//nolint:gocognit // auth fallback chain is intentional; refactoring would harm clarity
 func Auth(tokens []string, requireForReads bool, sessionSecret []byte) func(http.Handler) http.Handler {
 	// Store tokens as byte slices for constant-time comparison.
 	validTokens := make([][]byte, len(tokens))

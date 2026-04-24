@@ -11,9 +11,9 @@ import (
 
 // LoginHandler handles the /login endpoint for establishing dashboard sessions.
 type LoginHandler struct {
-	validTokens    [][]byte
-	sessionOpts    middleware.SessionOptions
-	loginFormTmpl  *template.Template
+	validTokens   [][]byte
+	sessionOpts   middleware.SessionOptions
+	loginFormTmpl *template.Template
 }
 
 // NewLoginHandler creates a LoginHandler.

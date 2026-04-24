@@ -9,7 +9,7 @@ import (
 // statusWriter wraps http.ResponseWriter to capture the status code.
 type statusWriter struct {
 	http.ResponseWriter
-	status int
+	status  int
 	written bool
 }
 

@@ -86,7 +86,9 @@ func (s *Store) Create(ctx context.Context, event *model.ChangeEvent) (result *m
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback() //nolint:errcheck
+	// Rollback after a successful Commit is a documented no-op (sql.ErrTxDone);
+	// the error is unactionable in either case.
+	defer tx.Rollback() //nolint:errcheck // safe: rollback after successful commit returns sql.ErrTxDone
 
 	var parentID *string
 	if event.ParentID != "" {
@@ -172,13 +174,19 @@ func (s *Store) List(ctx context.Context, params model.ListParams) (result *mode
 	limit := params.EffectiveLimit()
 
 	// Count total matching rows.
+	// `where` comes from buildWhereClause and is composed only of constant
+	// SQL fragments containing `?` placeholders; user input is bound via
+	// the args slice passed to QueryRowContext, never interpolated.
+	//nolint:gosec // G201: SQL fragments are constants; user input bound via parameter placeholders
 	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM change_events%s", where)
 	var totalCount int
 	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&totalCount); err != nil {
 		return nil, fmt.Errorf("count events: %w", err)
 	}
 
-	// Fetch the page.
+	// Fetch the page. Same constraint as countQuery above: user input is
+	// bound via parameters, only the WHERE clause shape is interpolated.
+	//nolint:gosec // G201: SQL fragments are constants; user input bound via parameter placeholders
 	selectQuery := fmt.Sprintf(
 		`SELECT id, external_id, parent_id, user_name, timestamp, event_type, description, long_description, created_at
 		 FROM change_events%s
@@ -190,7 +198,7 @@ func (s *Store) List(ctx context.Context, params model.ListParams) (result *mode
 	fetchArgs := make([]any, 0, len(args)+2)
 	fetchArgs = append(fetchArgs, args...)
 	fetchArgs = append(fetchArgs, limit, params.Offset)
-	rows, err := s.db.QueryContext(ctx, selectQuery, fetchArgs...)
+	rows, err := s.db.QueryContext(ctx, selectQuery, fetchArgs...) //nolint:sqlclosecheck // closed via deferred closeQuiet helper below
 	if err != nil {
 		return nil, fmt.Errorf("list events: %w", err)
 	}
@@ -231,11 +239,17 @@ func (s *Store) List(ctx context.Context, params model.ListParams) (result *mode
 
 // GetAnnotations returns the derived annotation state (starred, alerted) for a
 // single event by walking its meta-events in reverse chronological order.
+//
+// Complexity comes from the chronological walk plus four meta-event types
+// (star/unstar, alert/clear-alert) each gated on whether their resolution
+// is still pending. Splitting the loop body out hides the state machine.
+//
+//nolint:gocognit // meta-event resolution loop; complexity is inherent to the state machine
 func (s *Store) GetAnnotations(ctx context.Context, eventID string) (result *model.EventAnnotations, err error) {
 	start := time.Now()
 	defer func() { s.logOperation(ctx, "GetAnnotations", start, err) }()
 
-	rows, err := s.db.QueryContext(
+	rows, err := s.db.QueryContext( //nolint:sqlclosecheck // closed via deferred closeQuiet helper below
 		ctx,
 		`SELECT event_type FROM change_events
 		 WHERE parent_id = ? AND event_type IN ('star', 'unstar', 'alert', 'clear-alert')
@@ -292,6 +306,10 @@ func (s *Store) GetAnnotations(ctx context.Context, eventID string) (result *mod
 }
 
 // GetAnnotationsBatch returns the derived annotation state for multiple events.
+// It runs the same per-event resolution as GetAnnotations, fanned out across a
+// shared rows iteration with per-parent state tracking -- avoiding N+1 queries.
+//
+//nolint:gocognit,funlen // batched variant of GetAnnotations; same state machine, plus per-parent tracking
 func (s *Store) GetAnnotationsBatch(ctx context.Context, eventIDs []string) (result map[string]*model.EventAnnotations, err error) {
 	start := time.Now()
 	defer func() { s.logOperation(ctx, "GetAnnotationsBatch", start, err) }()
@@ -307,6 +325,9 @@ func (s *Store) GetAnnotationsBatch(ctx context.Context, eventIDs []string) (res
 		args[i] = id
 	}
 
+	// Only the IN-list placeholder count is interpolated; the placeholders
+	// themselves are literal `?` and the eventIDs are bound via the args slice.
+	//nolint:gosec // G201: only `?` placeholder count is interpolated; user input bound via parameter placeholders
 	query := fmt.Sprintf(
 		`SELECT parent_id, event_type FROM change_events
 		 WHERE parent_id IN (%s) AND event_type IN ('star', 'unstar', 'alert', 'clear-alert')
@@ -314,7 +335,7 @@ func (s *Store) GetAnnotationsBatch(ctx context.Context, eventIDs []string) (res
 		strings.Join(placeholders, ","),
 	)
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.db.QueryContext(ctx, query, args...) //nolint:sqlclosecheck // closed via deferred closeQuiet helper below
 	if err != nil {
 		return nil, fmt.Errorf("query annotations batch: %w", err)
 	}
@@ -481,7 +502,7 @@ func insertTags(ctx context.Context, tx *sql.Tx, eventID string, tags map[string
 		return nil
 	}
 
-	stmt, err := tx.PrepareContext(
+	stmt, err := tx.PrepareContext( //nolint:sqlclosecheck // closed via deferred closeQuiet helper below
 		ctx,
 		`INSERT INTO change_event_tags (event_id, key, value) VALUES (?, ?, ?)`,
 	)
@@ -512,12 +533,15 @@ func (s *Store) loadTagsForEvents(ctx context.Context, ids []string) (map[string
 		args[i] = id
 	}
 
+	// Only the IN-list placeholder count is interpolated; ids are bound
+	// via the args slice.
+	//nolint:gosec // G201: only `?` placeholder count is interpolated; user input bound via parameter placeholders
 	query := fmt.Sprintf(
 		`SELECT event_id, key, value FROM change_event_tags WHERE event_id IN (%s)`,
 		strings.Join(placeholders, ","),
 	)
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.db.QueryContext(ctx, query, args...) //nolint:sqlclosecheck // closed via deferred closeQuiet helper below
 	if err != nil {
 		return nil, fmt.Errorf("load tags: %w", err)
 	}

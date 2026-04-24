@@ -9,9 +9,9 @@ const (
 	EventTypeK8sChange   = "k8s-change"
 
 	// Meta-event types for annotations.
-	EventTypeStar      = "star"
-	EventTypeUnstar    = "unstar"
-	EventTypeAlert     = "alert"
+	EventTypeStar       = "star"
+	EventTypeUnstar     = "unstar"
+	EventTypeAlert      = "alert"
 	EventTypeClearAlert = "clear-alert"
 )
 
