@@ -1,6 +1,7 @@
 package handler //nolint:testpackage // white-box tests cover unexported request-parsing helpers (parseDashboardRequest, parseDashboardRange, parseDashboardTags, parseBoundedInt, buildDashboardEvents) which have no public API to test through
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
@@ -21,7 +22,7 @@ func TestParseDashboardRequest(t *testing.T) {
 	t.Run("default query sets TopLevel and 24h range", func(t *testing.T) {
 		t.Parallel()
 
-		r := httptest.NewRequestWithContext(t.Context(), "GET", "/", nil)
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 		p, f := parseDashboardRequest(r)
 
 		if !p.TopLevel {
@@ -46,7 +47,7 @@ func TestParseDashboardRequest(t *testing.T) {
 
 		r := httptest.NewRequestWithContext(
 			t.Context(),
-			"GET",
+			http.MethodGet,
 			"/?range=custom"+
 				"&start_after=2026-04-20T10:00"+
 				"&start_before=2026-04-25T18:00"+

@@ -88,13 +88,9 @@ func ValidateToken(provided []byte, validTokens [][]byte) bool {
 
 // extractBearerToken pulls the token from an "Authorization: Bearer <token>" header.
 func extractBearerToken(r *http.Request) string {
-	auth := r.Header.Get("Authorization")
-	if auth == "" {
-		return ""
-	}
 	const prefix = "Bearer "
-	if strings.HasPrefix(auth, prefix) {
-		return strings.TrimPrefix(auth, prefix)
+	if token, ok := strings.CutPrefix(r.Header.Get("Authorization"), prefix); ok {
+		return token
 	}
 	return ""
 }
