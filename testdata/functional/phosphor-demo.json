@@ -175,14 +175,13 @@
       }
     },
     {
-      "ref": "uncorrelated_start",
+      "ref": "uncorrelated_event",
       "external_id": "demo-uncorrelated-start",
       "user_name": "legacy-hook",
       "timestamp_offset": "-50m",
       "event_type": "deployment",
       "description": "Legacy event without a logical operation ID",
       "tags": {
-        "phase": "start",
         "team": "payments",
         "scope": "service",
         "severity": "sev2"

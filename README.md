@@ -443,6 +443,8 @@ pcr-api "http://localhost:8080/api/v1/events?tag=change_id:deploy-abc123"
 
 History retains both rows. Current includes the start until a top-level end event has the same event type and correlation identifier. Exact lowercase `phase=start` and `phase=end` values participate. If both identifier tags exist, non-empty `change_id` takes precedence; an empty `change_id` falls back to non-empty `deploy_id`. Events without a usable identifier remain in History but cannot enter Current.
 
+New events with lifecycle tags must provide both an exact `phase=start` or `phase=end` and a non-empty `change_id` or `deploy_id`. Maintenance events always require this lifecycle pair because the Maintenance windows preset represents open operations. New `severity` values are limited to `sev0` through `sev3`, and new `scope` values to `service`, `system`, or `site`; accepted mixed-case values are stored in lowercase so dashboard presets and badge styling agree.
+
 Each logical identifier represents one start/end cycle. Duplicate starts collapse to the earliest `timestamp`, then `id`; any matching end closes the logical operation. Give a restarted operation a new logical identifier. Retries should instead reuse a stable, phase-specific `external_id`.
 
 Display and visibility tags come from the representative start event:

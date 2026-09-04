@@ -909,6 +909,7 @@ func TestDashboardRecordChange(t *testing.T) {
 			`name="link_url"`,
 			`data-record-form`,
 			`data-link-row`,
+			`data-maintenance-guidance`,
 			`src="/static/form-validation.js"`,
 		} {
 			if !strings.Contains(body, want) {
@@ -1024,6 +1025,24 @@ func TestDashboardRecordChange(t *testing.T) {
 		}
 		if len(created.Links) != 1 || created.Links[0].Label != "Release PR" || created.Links[0].URL != "https://github.com/example/payments/pull/2468" {
 			t.Errorf("created links = %+v", created.Links)
+		}
+	})
+
+	t.Run("maintenance without lifecycle tags re-renders validation error", func(t *testing.T) {
+		t.Parallel()
+
+		ds := newDashboardTestStack()
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/events", nil)
+		addCSRFFormToRequest(t, req, url.Values{
+			"event_type":  {"maintenance"},
+			"description": {"WAF POP2"},
+			"tags":        {"team=platform"},
+		})
+		rec := httptest.NewRecorder()
+		ds.router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "maintenance events require") {
+			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 		}
 	})
 

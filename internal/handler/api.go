@@ -260,6 +260,8 @@ func mapServiceError(ctx context.Context, w http.ResponseWriter, err error) {
 		writeError(ctx, w, http.StatusBadRequest, "validation_error", "user_name is required")
 	case errors.Is(err, service.ErrEventTypeRequired):
 		writeError(ctx, w, http.StatusBadRequest, "validation_error", "event_type is required")
+	case errors.Is(err, service.ErrInvalidTags):
+		writeError(ctx, w, http.StatusBadRequest, "validation_error", err.Error())
 	case errors.Is(err, service.ErrInvalidLink):
 		writeError(ctx, w, http.StatusBadRequest, "validation_error", err.Error())
 	case errors.Is(err, service.ErrLinksRequired):

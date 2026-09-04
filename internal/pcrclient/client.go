@@ -14,9 +14,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const maxResponseSize = 4 << 20
+const maxErrorResponseSize = 64 << 10
+const maxErrorDetailSize = 4 << 10
 
 // ErrorKind is a stable category suitable for mapping to process exit codes.
 type ErrorKind int
@@ -30,16 +34,24 @@ const (
 )
 
 // Error describes an API failure without retaining response bodies or headers.
+// Code and Message contain only bounded, validated fields from PCR's JSON
+// error envelope.
 type Error struct {
-	Kind   ErrorKind
-	Host   string
-	Status int
-	Op     string
-	Err    error
+	Kind    ErrorKind
+	Host    string
+	Status  int
+	Op      string
+	Code    string
+	Message string
+	Err     error
 }
 
 func (e *Error) Error() string {
 	switch {
+	case e.Status != 0 && e.Code != "" && e.Message != "":
+		return fmt.Sprintf("%s: PCR at %s returned HTTP %d (%s): %s", e.Op, e.Host, e.Status, e.Code, e.Message)
+	case e.Status != 0 && e.Message != "":
+		return fmt.Sprintf("%s: PCR at %s returned HTTP %d: %s", e.Op, e.Host, e.Status, e.Message)
 	case e.Status != 0:
 		return fmt.Sprintf("%s: PCR at %s returned HTTP %d", e.Op, e.Host, e.Status)
 	case e.Err != nil:
@@ -296,7 +308,11 @@ func (c *Client) do(ctx context.Context, operation, method string, segments []st
 	}
 	defer func() { _ = response.Body.Close() }()
 	if !containsStatus(success, response.StatusCode) {
-		return statusError(operation, c.origin.Host, response.StatusCode)
+		var code, message string
+		if response.StatusCode >= http.StatusBadRequest && response.StatusCode < http.StatusInternalServerError {
+			code, message = decodeErrorResponse(response.Body)
+		}
+		return statusError(operation, c.origin.Host, response.StatusCode, code, message)
 	}
 
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxResponseSize+1))
@@ -330,7 +346,48 @@ func (c *Client) endpoint(segments []string, query url.Values) *url.URL {
 	return &endpoint
 }
 
-func statusError(operation, host string, status int) error {
+func decodeErrorResponse(body io.Reader) (string, string) {
+	data, err := io.ReadAll(io.LimitReader(body, maxErrorResponseSize+1))
+	if err != nil || len(data) > maxErrorResponseSize {
+		return "", ""
+	}
+	var response struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(data, &response); err != nil {
+		return "", ""
+	}
+	code := strings.TrimSpace(response.Error.Code)
+	message := strings.TrimSpace(response.Error.Message)
+	if !safeErrorCode(code) || !safeErrorMessage(message) {
+		return "", ""
+	}
+	return code, message
+}
+
+func safeErrorCode(code string) bool {
+	if code == "" || len(code) > 128 {
+		return false
+	}
+	for _, r := range code {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+func safeErrorMessage(message string) bool {
+	return message != "" && len(message) <= maxErrorDetailSize && utf8.ValidString(message) &&
+		strings.IndexFunc(message, func(r rune) bool {
+			return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
+		}) < 0
+}
+
+func statusError(operation, host string, status int, code, message string) error {
 	kind := ErrorRequest
 	switch {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
@@ -340,7 +397,7 @@ func statusError(operation, host string, status int) error {
 	case status >= 500:
 		kind = ErrorUnavailable
 	}
-	return &Error{Kind: kind, Host: host, Status: status, Op: operation}
+	return &Error{Kind: kind, Host: host, Status: status, Op: operation, Code: code, Message: message}
 }
 
 func containsStatus(statuses []int, status int) bool {

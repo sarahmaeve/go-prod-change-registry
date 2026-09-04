@@ -58,8 +58,12 @@ func (h *DashboardHandler) CreateEvent(w http.ResponseWriter, r *http.Request) {
 
 	event, err := h.svc.Create(r.Context(), request)
 	if err != nil && !errors.Is(err, store.ErrDuplicate) {
-		if errors.Is(err, service.ErrInvalidLink) {
+		switch {
+		case errors.Is(err, service.ErrInvalidLink):
 			h.renderCreateEvent(w, r, http.StatusBadRequest, form, invalidLinkMessage)
+			return
+		case errors.Is(err, service.ErrInvalidTags):
+			h.renderCreateEvent(w, r, http.StatusBadRequest, form, err.Error())
 			return
 		}
 		slog.ErrorContext(r.Context(), "dashboard create event error", "error", err)

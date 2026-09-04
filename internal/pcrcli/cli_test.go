@@ -214,7 +214,8 @@ func TestCredentialCannotBePassedAsAFlagOrEchoed(t *testing.T) {
 func TestMissingCredentialUsesConfigurationExitCode(t *testing.T) {
 	t.Parallel()
 	var stdout, stderr strings.Builder
-	code := Run(t.Context(), []string{"events", "get", "event-1"}, emptyEnvironment, strings.NewReader(""), &stdout, &stderr, BuildInfo{})
+	missing := filepath.Join(t.TempDir(), "missing.toml")
+	code := Run(t.Context(), []string{"--config", missing, "events", "get", "event-1"}, emptyEnvironment, strings.NewReader(""), &stdout, &stderr, BuildInfo{})
 	if code != exitConfig {
 		t.Fatalf("Run(missing credential) = %d, stderr = %q, want %d", code, stderr.String(), exitConfig)
 	}

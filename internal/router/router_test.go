@@ -27,6 +27,7 @@ type mockStore struct {
 	toggleStarFn          func(ctx context.Context, eventID, userName string) (*model.ChangeEvent, error)
 	toggleAlertFn         func(ctx context.Context, eventID, userName string) (*model.ChangeEvent, error)
 	getByIDFn             func(ctx context.Context, id string) (*model.ChangeEvent, error)
+	getByExternalIDFn     func(ctx context.Context, externalID string) (*model.ChangeEvent, error)
 	listFn                func(ctx context.Context, params model.ListParams) (*model.ListResult, error)
 	listCurrentFn         func(ctx context.Context, params model.CurrentParams) (*model.ListResult, error)
 	getAnnotationsFn      func(ctx context.Context, eventID string) (*model.EventAnnotations, error)
@@ -61,6 +62,13 @@ func (m *mockStore) GetByID(ctx context.Context, id string) (*model.ChangeEvent,
 		return m.getByIDFn(ctx, id)
 	}
 	panic("unexpected call to GetByID")
+}
+
+func (m *mockStore) GetByExternalID(ctx context.Context, externalID string) (*model.ChangeEvent, error) {
+	if m.getByExternalIDFn != nil {
+		return m.getByExternalIDFn(ctx, externalID)
+	}
+	return nil, nil
 }
 
 func (m *mockStore) List(ctx context.Context, params model.ListParams) (*model.ListResult, error) {

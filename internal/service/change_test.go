@@ -5,10 +5,14 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/sarahmaeve/go-prod-change-registry/internal/fixture"
 	"github.com/sarahmaeve/go-prod-change-registry/internal/model"
 	"github.com/sarahmaeve/go-prod-change-registry/internal/service"
 	"github.com/sarahmaeve/go-prod-change-registry/internal/store"
@@ -24,6 +28,7 @@ type mockStore struct {
 	toggleStarIdentityFn  func(ctx context.Context, eventID string, user model.UserIdentity) (*model.ChangeEvent, error)
 	toggleAlertIdentityFn func(ctx context.Context, eventID string, user model.UserIdentity) (*model.ChangeEvent, error)
 	getByIDFn             func(ctx context.Context, id string) (*model.ChangeEvent, error)
+	getByExternalIDFn     func(ctx context.Context, externalID string) (*model.ChangeEvent, error)
 	listFn                func(ctx context.Context, params model.ListParams) (*model.ListResult, error)
 	listCurrentFn         func(ctx context.Context, params model.CurrentParams) (*model.ListResult, error)
 	getAnnotationsFn      func(ctx context.Context, eventID string) (*model.EventAnnotations, error)
@@ -62,6 +67,13 @@ func (m *mockStore) GetByID(ctx context.Context, id string) (*model.ChangeEvent,
 		panic("unexpected call to GetByID")
 	}
 	return m.getByIDFn(ctx, id)
+}
+
+func (m *mockStore) GetByExternalID(ctx context.Context, externalID string) (*model.ChangeEvent, error) {
+	if m.getByExternalIDFn == nil {
+		return nil, nil
+	}
+	return m.getByExternalIDFn(ctx, externalID)
 }
 
 func (m *mockStore) List(ctx context.Context, params model.ListParams) (*model.ListResult, error) {
@@ -241,6 +253,88 @@ func TestCreate(t *testing.T) {
 		}
 	})
 
+	t.Run("rejects tags that cannot participate in dashboard filters", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name      string
+			eventType string
+			tags      map[string]string
+			message   string
+		}{
+			{name: "maintenance without lifecycle", eventType: model.EventTypeMaintenance, tags: map[string]string{"team": "platform"}, message: "maintenance events require"},
+			{name: "maintenance without identifier", eventType: model.EventTypeMaintenance, tags: map[string]string{"phase": "start"}, message: "maintenance events require"},
+			{name: "maintenance with whitespace identifier", eventType: model.EventTypeMaintenance, tags: map[string]string{"phase": "start", "change_id": "   "}, message: "maintenance events require"},
+			{name: "invalid phase", eventType: model.EventTypeDeployment, tags: map[string]string{"phase": "pending", "change_id": "change-1"}, message: "phase must be exactly"},
+			{name: "phase without identifier", eventType: model.EventTypeDeployment, tags: map[string]string{"phase": "start"}, message: "phase requires"},
+			{name: "identifier without phase", eventType: model.EventTypeDeployment, tags: map[string]string{"change_id": "change-1"}, message: "require phase"},
+			{name: "unsupported severity", eventType: model.EventTypeDeployment, tags: map[string]string{"severity": "critical"}, message: "severity must be"},
+			{name: "unsupported scope", eventType: model.EventTypeDeployment, tags: map[string]string{"scope": "regional"}, message: "scope must be"},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				_, err := service.NewChangeService(&mockStore{}).Create(context.Background(), &model.CreateChangeRequest{
+					UserName:  "alice",
+					EventType: tc.eventType,
+					Tags:      tc.tags,
+				})
+				if !errors.Is(err, service.ErrInvalidTags) || !strings.Contains(err.Error(), tc.message) {
+					t.Fatalf("Create() error = %v, want invalid-tags error containing %q", err, tc.message)
+				}
+			})
+		}
+	})
+
+	t.Run("accepts maintenance lifecycle and normalizes filter tags", func(t *testing.T) {
+		t.Parallel()
+
+		var captured *model.ChangeEvent
+		ms := &mockStore{createFn: func(_ context.Context, event *model.ChangeEvent) (*model.ChangeEvent, error) {
+			captured = event
+			return event, nil
+		}}
+		requestTags := map[string]string{
+			"phase": " end ", "deploy_id": " waf-pop2 ", "team": " platform ", "severity": " SEV1 ", "scope": " SITE ",
+		}
+		created, err := service.NewChangeService(ms).Create(context.Background(), &model.CreateChangeRequest{
+			UserName: "alice", EventType: " Maintenance ", Tags: requestTags,
+		})
+		if err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+		if captured == nil || captured.Tags["phase"] != "end" || captured.Tags["deploy_id"] != "waf-pop2" ||
+			captured.Tags["team"] != "platform" || captured.Tags["severity"] != "sev1" || captured.Tags["scope"] != "site" {
+			t.Fatalf("stored tags = %v, want normalized well-known tags", captured.Tags)
+		}
+		if created.EventType != model.EventTypeMaintenance {
+			t.Fatalf("stored event type = %q, want maintenance", created.EventType)
+		}
+		if requestTags["deploy_id"] != " waf-pop2 " || requestTags["severity"] != " SEV1 " || requestTags["scope"] != " SITE " {
+			t.Fatalf("Create() mutated request tags: %v", requestTags)
+		}
+	})
+
+	t.Run("invalid legacy retry still returns existing external ID", func(t *testing.T) {
+		t.Parallel()
+
+		existing := &model.ChangeEvent{ID: "existing", ExternalID: "legacy-maintenance"}
+		ms := &mockStore{getByExternalIDFn: func(_ context.Context, externalID string) (*model.ChangeEvent, error) {
+			if externalID != existing.ExternalID {
+				t.Errorf("GetByExternalID(%q), want %q", externalID, existing.ExternalID)
+			}
+			return existing, nil
+		}}
+		got, err := service.NewChangeService(ms).Create(context.Background(), &model.CreateChangeRequest{
+			ExternalID: existing.ExternalID,
+			EventType:  model.EventTypeMaintenance,
+			Tags:       map[string]string{"team": "platform"},
+		})
+		if got != existing || !errors.Is(err, store.ErrDuplicate) {
+			t.Fatalf("Create() = (%p, %v), want existing event and duplicate error", got, err)
+		}
+	})
+
 	t.Run("with parent_id verifies parent existence", func(t *testing.T) {
 		t.Parallel()
 
@@ -352,6 +446,39 @@ func TestCreate(t *testing.T) {
 			t.Fatalf("Timestamp = %v (%v), want %v (UTC)", got.Timestamp, got.Timestamp.Location(), want)
 		}
 	})
+}
+
+func TestDemoFixtureUsesAcceptedNewEventShapes(t *testing.T) {
+	t.Parallel()
+
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve service test path")
+	}
+	fixturePath := filepath.Join(filepath.Dir(sourceFile), "..", "..", "testdata", "functional", "phosphor-demo.json")
+	file, err := os.Open(fixturePath) //nolint:gosec // G304: path is rooted at this test source file
+	if err != nil {
+		t.Fatalf("open demo fixture: %v", err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+
+	events, err := fixture.Load(file)
+	if err != nil {
+		t.Fatalf("load demo fixture: %v", err)
+	}
+	eventsByID := make(map[string]*model.ChangeEvent)
+	ms := &mockStore{}
+	ms.createFn = func(_ context.Context, event *model.ChangeEvent) (*model.ChangeEvent, error) {
+		eventsByID[event.ID] = event
+		return event, nil
+	}
+	ms.getByIDFn = func(_ context.Context, id string) (*model.ChangeEvent, error) {
+		return eventsByID[id], nil
+	}
+
+	if _, err := fixture.Apply(t.Context(), service.NewChangeService(ms), events); err != nil {
+		t.Fatalf("apply demo fixture through ChangeService: %v", err)
+	}
 }
 
 func TestAddLinks(t *testing.T) {
@@ -529,6 +656,46 @@ func TestCloseOperation(t *testing.T) {
 	wantExternalID := fmt.Sprintf("pcr:close:%x", sha256.Sum256([]byte("deployment\x00change_id\x00change-1")))
 	if closed.ExternalID != wantExternalID || closed.Tags["phase"] != "end" || closed.Tags["change_id"] != "change-1" || closed.Tags["team"] != "payments" {
 		t.Errorf("closure identity/tags = external %q tags %#v", closed.ExternalID, closed.Tags)
+	}
+}
+
+func TestCloseOperationPreservesLegacyTags(t *testing.T) {
+	t.Parallel()
+
+	start := &model.ChangeEvent{
+		ID:          "legacy-start",
+		UserName:    "alice",
+		EventType:   model.EventTypeDeployment,
+		Description: "legacy rollout",
+		Tags: map[string]string{
+			"phase": "start", "change_id": " legacy-id ", "severity": "critical", "scope": "regional",
+		},
+	}
+	var closed *model.ChangeEvent
+	ms := &mockStore{
+		getByIDFn: func(_ context.Context, _ string) (*model.ChangeEvent, error) {
+			return start, nil
+		},
+		listCurrentFn: func(_ context.Context, params model.CurrentParams) (*model.ListResult, error) {
+			if params.CorrelationValue != " legacy-id " {
+				t.Errorf("ListCurrent() correlation value = %q, want %q", params.CorrelationValue, " legacy-id ")
+			}
+			return &model.ListResult{Events: []model.ChangeEvent{*start}, TotalCount: 1}, nil
+		},
+		createFn: func(_ context.Context, event *model.ChangeEvent) (*model.ChangeEvent, error) {
+			closed = event
+			return event, nil
+		},
+	}
+
+	if _, err := service.NewChangeService(ms).CloseOperation(t.Context(), start.ID, "bob", ""); err != nil {
+		t.Fatalf("CloseOperation() error = %v", err)
+	}
+	if closed == nil {
+		t.Fatal("CloseOperation() did not append an event")
+	}
+	if closed.Tags["change_id"] != " legacy-id " || closed.Tags["severity"] != "critical" || closed.Tags["scope"] != "regional" {
+		t.Errorf("closure tags = %#v, want legacy values preserved", closed.Tags)
 	}
 }
 
