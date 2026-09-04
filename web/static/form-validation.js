@@ -52,8 +52,9 @@
         return null;
     }
 
-    function tagsError(input) {
+    function parseTags(input) {
         var keys = new Set();
+        var tags = {};
         var lines = input.value.split(/\r?\n/u);
         for (var i = 0; i < lines.length; i += 1) {
             var line = lines[i].trim();
@@ -62,13 +63,45 @@
             }
             var separator = line.indexOf("=");
             var key = separator < 0 ? "" : line.slice(0, separator).trim();
+            var value = separator < 0 ? "" : line.slice(separator + 1).trim();
             if (!key) {
-                return "Tags must use one key=value pair per line.";
+                return {tags: tags, message: "Tags must use one key=value pair per line."};
             }
             if (keys.has(key)) {
-                return "Each tag key may appear only once.";
+                return {tags: tags, message: "Each tag key may appear only once."};
             }
             keys.add(key);
+            tags[key] = value;
+        }
+        return {tags: tags, message: ""};
+    }
+
+    function eventTagsError(eventType, tags) {
+        var hasPhase = Object.prototype.hasOwnProperty.call(tags, "phase");
+        var validPhase = tags.phase === "start" || tags.phase === "end";
+        var hasIdentifier = Boolean(tags.change_id || tags.deploy_id);
+        var hasIdentifierTag = Object.prototype.hasOwnProperty.call(tags, "change_id") ||
+            Object.prototype.hasOwnProperty.call(tags, "deploy_id");
+
+        if (eventType === "maintenance" && (!hasPhase || !validPhase || !hasIdentifier)) {
+            return "Maintenance events require phase=start or phase=end and a non-empty change_id or deploy_id.";
+        }
+        if (hasPhase && !validPhase) {
+            return "Phase must be exactly start or end.";
+        }
+        if (hasPhase && !hasIdentifier) {
+            return "Phase requires a non-empty change_id or deploy_id.";
+        }
+        if (!hasPhase && hasIdentifierTag) {
+            return "change_id and deploy_id require phase=start or phase=end.";
+        }
+        if (Object.prototype.hasOwnProperty.call(tags, "severity") &&
+                !/^(sev0|sev1|sev2|sev3)$/iu.test(tags.severity)) {
+            return "Severity must be sev0, sev1, sev2, or sev3.";
+        }
+        if (Object.prototype.hasOwnProperty.call(tags, "scope") &&
+                !/^(service|system|site)$/iu.test(tags.scope)) {
+            return "Scope must be service, system, or site.";
         }
         return "";
     }
@@ -90,10 +123,20 @@
 
     function prepareRecordForm(form) {
         var tags = form.querySelector('[name="tags"]');
+        var eventType = form.querySelector('[name="event_type"]');
+        var maintenanceGuidance = form.querySelector("[data-maintenance-guidance]");
+
+        function updateMaintenanceGuidance() {
+            maintenanceGuidance.hidden = eventType.value.trim().toLowerCase() !== "maintenance";
+        }
+
         resetValidationOnInput(form);
+        eventType.addEventListener("input", updateMaintenanceGuidance);
+        updateMaintenanceGuidance();
         form.addEventListener("submit", function (event) {
             tags.setCustomValidity("");
-            var message = tagsError(tags);
+            var parsed = parseTags(tags);
+            var message = parsed.message || eventTagsError(eventType.value.trim().toLowerCase(), parsed.tags);
             if (message) {
                 event.preventDefault();
                 reject(form, {input: tags, message: message});

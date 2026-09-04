@@ -36,6 +36,25 @@ func TestParseCurrentParams(t *testing.T) {
 		}
 	})
 
+	t.Run("canonicalizes well-known filter values", func(t *testing.T) {
+		t.Parallel()
+
+		params, err := parseCurrentParams(url.Values{
+			"for_team": {" platform "},
+			"scope":    {" SITE ", ""},
+			"severity": {" SEV1 "},
+			"type":     {" maintenance "},
+		})
+		if err != nil {
+			t.Fatalf("parseCurrentParams() error = %v", err)
+		}
+		if params.ForTeam != "platform" || params.EventType != "maintenance" ||
+			len(params.Scopes) != 1 || params.Scopes[0] != "site" ||
+			len(params.Severities) != 1 || params.Severities[0] != "sev1" {
+			t.Fatalf("parseCurrentParams() = %+v", params)
+		}
+	})
+
 	for _, key := range []string{"limit", "offset"} {
 		t.Run("rejects malformed "+key, func(t *testing.T) {
 			t.Parallel()

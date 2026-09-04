@@ -20,6 +20,7 @@ import (
 var (
 	ErrUserNameRequired     = errors.New("user_name is required")
 	ErrEventTypeRequired    = errors.New("event_type is required")
+	ErrInvalidTags          = errors.New("invalid event tags")
 	ErrInvalidLink          = errors.New("links must have safe labels and absolute http or https URLs without credentials")
 	ErrLinksRequired        = errors.New("at least one link is required")
 	ErrEventNotFound        = errors.New("event not found")
@@ -37,11 +38,40 @@ func NewChangeService(store store.ChangeStore) *ChangeService {
 }
 
 func (s *ChangeService) Create(ctx context.Context, req *model.CreateChangeRequest) (*model.ChangeEvent, error) {
+	return s.create(ctx, req, true)
+}
+
+func (s *ChangeService) create(ctx context.Context, req *model.CreateChangeRequest, enforceTagPolicy bool) (*model.ChangeEvent, error) {
+	// Preserve external_id idempotency across validation changes: retries of
+	// records accepted by an older release still return the original event.
+	if req.ExternalID != "" {
+		existing, err := s.store.GetByExternalID(ctx, req.ExternalID)
+		if err != nil {
+			return nil, err
+		}
+		if existing != nil {
+			return existing, store.ErrDuplicate
+		}
+	}
 	if req.UserName == "" {
 		return nil, ErrUserNameRequired
 	}
-	if req.EventType == "" {
+	eventType := req.EventType
+	if eventType == "" {
 		return nil, ErrEventTypeRequired
+	}
+	tags := maps.Clone(req.Tags)
+	if tags == nil {
+		tags = make(map[string]string)
+	}
+	if enforceTagPolicy {
+		if strings.EqualFold(strings.TrimSpace(eventType), model.EventTypeMaintenance) {
+			eventType = model.EventTypeMaintenance
+		}
+		tags = normalizeEventTags(tags)
+		if err := validateEventTags(eventType, tags); err != nil {
+			return nil, err
+		}
 	}
 	if err := validateLinks(req.Links); err != nil {
 		return nil, err
@@ -64,11 +94,6 @@ func (s *ChangeService) Create(ctx context.Context, req *model.CreateChangeReque
 		ts = req.Timestamp.UTC()
 	}
 
-	tags := req.Tags
-	if tags == nil {
-		tags = make(map[string]string)
-	}
-
 	event := &model.ChangeEvent{
 		ID:              uuid.Must(uuid.NewV7()).String(),
 		ExternalID:      req.ExternalID,
@@ -77,7 +102,7 @@ func (s *ChangeService) Create(ctx context.Context, req *model.CreateChangeReque
 		UserProvider:    req.UserProvider,
 		UserSubject:     req.UserSubject,
 		Timestamp:       ts,
-		EventType:       req.EventType,
+		EventType:       eventType,
 		Description:     req.Description,
 		LongDescription: req.LongDescription,
 		Links:           slices.Clone(req.Links),
@@ -90,6 +115,77 @@ func (s *ChangeService) Create(ctx context.Context, req *model.CreateChangeReque
 		return created, store.ErrDuplicate
 	}
 	return created, err
+}
+
+type invalidTagsError struct {
+	message string
+}
+
+func (e invalidTagsError) Error() string { return e.message }
+func (e invalidTagsError) Unwrap() error { return ErrInvalidTags }
+
+func invalidTags(message string) error {
+	return invalidTagsError{message: message}
+}
+
+func normalizeEventTags(input map[string]string) map[string]string {
+	tags := maps.Clone(input)
+	// The browser trims every tag value. Apply the same rule to the well-known
+	// API tags whose exact values feed Current and its dashboard filters.
+	for _, key := range []string{"phase", "change_id", "deploy_id", "team", "severity", "scope"} {
+		if value, ok := tags[key]; ok {
+			tags[key] = strings.TrimSpace(value)
+		}
+	}
+	// Current queries accept legacy mixed-case severities, but canonical new
+	// writes keep badge classes and exact history tag filters predictable.
+	if severity, ok := tags["severity"]; ok {
+		tags["severity"] = strings.ToLower(severity)
+	}
+	if scope, ok := tags["scope"]; ok {
+		tags["scope"] = strings.ToLower(scope)
+	}
+	return tags
+}
+
+// validateEventTags protects the well-known tags that feed Current and its
+// dashboard presets. Other tags remain intentionally free-form.
+func validateEventTags(eventType string, tags map[string]string) error {
+	phase, hasPhase := tags["phase"]
+	changeID, hasChangeID := tags["change_id"]
+	deployID, hasDeployID := tags["deploy_id"]
+	hasIdentifier := changeID != "" || deployID != ""
+	hasIdentifierTag := hasChangeID || hasDeployID
+	validPhase := phase == "start" || phase == "end"
+
+	if eventType == model.EventTypeMaintenance && (!hasPhase || !validPhase || !hasIdentifier) {
+		return invalidTags("maintenance events require phase=start or phase=end and a non-empty change_id or deploy_id")
+	}
+	if hasPhase && !validPhase {
+		return invalidTags("phase must be exactly start or end")
+	}
+	if hasPhase && !hasIdentifier {
+		return invalidTags("phase requires a non-empty change_id or deploy_id")
+	}
+	if !hasPhase && hasIdentifierTag {
+		return invalidTags("change_id and deploy_id require phase=start or phase=end")
+	}
+
+	if severity, ok := tags["severity"]; ok {
+		switch strings.ToLower(severity) {
+		case "sev0", "sev1", "sev2", "sev3":
+		default:
+			return invalidTags("severity must be sev0, sev1, sev2, or sev3")
+		}
+	}
+	if scope, ok := tags["scope"]; ok {
+		switch strings.ToLower(scope) {
+		case "service", "system", "site":
+		default:
+			return invalidTags("scope must be service, system, or site")
+		}
+	}
+	return nil
 }
 
 const (
@@ -273,7 +369,9 @@ func (s *ChangeService) CloseOperationAs(ctx context.Context, eventID string, us
 	tags := maps.Clone(start.Tags)
 	tags[key] = value
 	tags["phase"] = "end"
-	created, err := s.Create(ctx, &model.CreateChangeRequest{
+	// intentional: preserve tags and correlation values from starts accepted
+	// before the current new-event tag policy.
+	created, err := s.create(ctx, &model.CreateChangeRequest{
 		ExternalID:   operationCloseExternalID(start.EventType, key, value),
 		UserName:     user.Name,
 		UserProvider: user.Provider,
@@ -281,7 +379,7 @@ func (s *ChangeService) CloseOperationAs(ctx context.Context, eventID string, us
 		EventType:    start.EventType,
 		Description:  description,
 		Tags:         tags,
-	})
+	}, false)
 	if errors.Is(err, store.ErrDuplicate) {
 		return created, nil
 	}

@@ -182,6 +182,56 @@ func TestResponseFailuresAreCategorizedAndBodyIsNeverExposed(t *testing.T) {
 	}
 }
 
+func TestStructuredAPIErrorIsActionable(t *testing.T) {
+	t.Parallel()
+
+	client := testClient(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return response(request, http.StatusBadRequest, `{"error":{"code":"validation_error","message":"maintenance events require phase=start and change_id"}}`), nil
+	}), "person@example.com:password")
+	_, err := client.Create(t.Context(), CreateRequest{EventType: "maintenance"})
+	var clientError *Error
+	if !errors.As(err, &clientError) {
+		t.Fatalf("Create() error = %v, want *Error", err)
+	}
+	if clientError.Code != "validation_error" || clientError.Message != "maintenance events require phase=start and change_id" {
+		t.Fatalf("structured error = code %q, message %q", clientError.Code, clientError.Message)
+	}
+	want := "HTTP 400 (validation_error): maintenance events require phase=start and change_id"
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("Create() error = %q, want actionable diagnostic containing %q", err, want)
+	}
+}
+
+func TestStructuredServerErrorIsOpaque(t *testing.T) {
+	t.Parallel()
+
+	const sensitive = "database connection string leaked"
+	client := testClient(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return response(request, http.StatusInternalServerError, `{"error":{"code":"internal_error","message":"database connection string leaked"}}`), nil
+	}), "person@example.com:password")
+	_, err := client.Get(t.Context(), "event-1")
+	var clientError *Error
+	if !errors.As(err, &clientError) {
+		t.Fatalf("Get() error = %v, want *Error", err)
+	}
+	if clientError.Code != "" || clientError.Message != "" || strings.Contains(err.Error(), sensitive) {
+		t.Fatalf("Get() error exposed structured server detail: %#v", clientError)
+	}
+}
+
+func TestUnsafeStructuredAPIErrorIsNotExposed(t *testing.T) {
+	t.Parallel()
+
+	const unsafe = "secret\nforged diagnostic"
+	client := testClient(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return response(request, http.StatusBadRequest, `{"error":{"code":"validation_error","message":"secret\nforged diagnostic"}}`), nil
+	}), "person@example.com:password")
+	_, err := client.Get(t.Context(), "event-1")
+	if strings.Contains(err.Error(), unsafe) || strings.Contains(err.Error(), "forged diagnostic") {
+		t.Fatalf("Get() error exposed unsafe response detail: %q", err)
+	}
+}
+
 func TestMalformedAndOversizedResponses(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

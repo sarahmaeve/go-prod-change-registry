@@ -53,6 +53,7 @@
                     <label for="tags">Tags</label>
                     <textarea id="tags" name="tags" rows="5" placeholder="team=payments&#10;scope=service&#10;severity=sev2">{{.Form.Tags}}</textarea>
                     <small>Enter one key=value pair per line. Use change_id and phase=start for a closable operation.</small>
+                    <small data-maintenance-guidance hidden>Maintenance events must open or close a window: add phase=start or phase=end and a non-empty change_id (or legacy deploy_id).</small>
                 </div>
             </div>
         </section>

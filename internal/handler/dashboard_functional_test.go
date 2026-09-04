@@ -252,7 +252,8 @@ func TestSeededDashboardViews(t *testing.T) {
 	jsRequest := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/static/form-validation.js", nil)
 	jsResponse := httptest.NewRecorder()
 	r.ServeHTTP(jsResponse, jsRequest)
-	if jsResponse.Code != http.StatusOK || !strings.Contains(jsResponse.Body.String(), "function validateLinks") {
+	if jsResponse.Code != http.StatusOK || !strings.Contains(jsResponse.Body.String(), "function validateLinks") ||
+		!strings.Contains(jsResponse.Body.String(), "function eventTagsError") {
 		t.Errorf("form validation script response = status %d; expected embedded validator", jsResponse.Code)
 	}
 }

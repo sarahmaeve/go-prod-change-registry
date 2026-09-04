@@ -27,12 +27,12 @@ func parseDashboardRequest(r *http.Request) (model.ListParams, dashboardFilters)
 	params := model.ListParams{TopLevel: true}
 	filters := dashboardFilters{
 		View:       dashboardView(q),
-		Team:       q.Get("team"),
-		Scopes:     q["scope"],
-		Severities: q["severity"],
+		Team:       strings.TrimSpace(q.Get("team")),
+		Scopes:     normalizeCurrentValues(q["scope"]),
+		Severities: normalizeCurrentValues(q["severity"]),
 	}
 	if filters.Team == "" {
-		filters.Team = q.Get("for_team")
+		filters.Team = strings.TrimSpace(q.Get("for_team"))
 	}
 
 	if filters.View == "history" || filters.View == "alerts" {
@@ -43,7 +43,7 @@ func parseDashboardRequest(r *http.Request) (model.ListParams, dashboardFilters)
 		params.AlertedOnly = true
 	}
 
-	if v := q.Get("type"); v != "" {
+	if v := strings.TrimSpace(q.Get("type")); v != "" {
 		filters.EventType = v
 		params.EventType = v
 	}

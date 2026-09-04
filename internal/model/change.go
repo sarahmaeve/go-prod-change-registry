@@ -15,6 +15,7 @@ const (
 	EventTypeDeployment  = "deployment"
 	EventTypeFeatureFlag = "feature-flag"
 	EventTypeK8sChange   = "k8s-change"
+	EventTypeMaintenance = "maintenance"
 
 	// Meta-event types for annotations.
 	EventTypeStar       = "star"
