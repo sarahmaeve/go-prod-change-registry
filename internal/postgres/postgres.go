@@ -88,14 +88,12 @@ func Migrate(databaseURL string, connectTimeout time.Duration) (err error) {
 		err = errors.Join(err, sourceErr, databaseErr)
 	}()
 
-	version, isDirty, versionErr := migrator.Version()
-	if versionErr != nil && !errors.Is(versionErr, migrate.ErrNoChange) && !errors.Is(versionErr, migrate.ErrNilVersion) {
-		return fmt.Errorf("read migration version: %w", versionErr)
-	}
-	if isDirty {
-		return fmt.Errorf("database migration is dirty at version %d; refusing to continue until it is repaired", version)
-	}
+	// Up checks the version and dirty state under the migration lock. A separate
+	// Version call can observe another caller's in-progress migration as dirty.
 	if err := migrator.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		if dirty, ok := errors.AsType[migrate.ErrDirty](err); ok {
+			return fmt.Errorf("database migration is dirty at version %d; refusing to continue until it is repaired", dirty.Version)
+		}
 		return fmt.Errorf("apply migrations: %w", err)
 	}
 	return nil

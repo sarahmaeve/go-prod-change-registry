@@ -4,6 +4,7 @@ package postgres_test
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"os"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/sarahmaeve/go-prod-change-registry/internal/postgres"
@@ -36,6 +38,15 @@ func TestMigrateCreatesPostgreSQLSchema(t *testing.T) {
 		t.Fatalf("Open(): %v", err)
 	}
 	t.Cleanup(pool.Close)
+
+	var version int
+	var dirty bool
+	if err := pool.QueryRow(t.Context(), "SELECT version, dirty FROM schema_migrations").Scan(&version, &dirty); err != nil {
+		t.Fatalf("read migration state after repeated migration: %v", err)
+	}
+	if version != 1 || dirty {
+		t.Fatalf("migration state = (%d, %t), want version 1, clean", version, dirty)
+	}
 
 	var dataType string
 	err = pool.QueryRow(t.Context(), `
@@ -95,6 +106,14 @@ func TestMigrateRefusesDirtyDatabase(t *testing.T) {
 	if !strings.Contains(err.Error(), "dirty at version 1") {
 		t.Errorf("Migrate() error = %q, want dirty version context", err)
 	}
+	var version int
+	var dirty bool
+	if err := pool.QueryRow(t.Context(), "SELECT version, dirty FROM schema_migrations").Scan(&version, &dirty); err != nil {
+		t.Fatalf("read rejected migration state: %v", err)
+	}
+	if version != 1 || !dirty {
+		t.Fatalf("migration state = (%d, %t), want original version 1, dirty", version, dirty)
+	}
 }
 
 func TestMigrateSerializesConcurrentCallers(t *testing.T) {
@@ -118,6 +137,102 @@ func TestMigrateSerializesConcurrentCallers(t *testing.T) {
 		if err != nil {
 			t.Errorf("Migrate() concurrent error = %v", err)
 		}
+	}
+}
+
+func TestMigrateReadsVersionUnderAdvisoryLock(t *testing.T) {
+	t.Parallel()
+	databaseURL := isolatedDatabaseURL(t)
+	if err := postgres.Migrate(databaseURL, time.Second); err != nil {
+		t.Fatalf("initialize schema: %v", err)
+	}
+	pool, err := pgxpool.New(t.Context(), databaseURL)
+	if err != nil {
+		t.Fatalf("open observation pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	tx, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatalf("begin version-table blocker: %v", err)
+	}
+	done := make(chan struct{})
+	started := false
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			t.Errorf("release version-table blocker: %v", err)
+		}
+		if started {
+			select {
+			case <-done:
+			case <-ctx.Done():
+				t.Error("migration did not finish after releasing version-table blocker")
+			}
+		}
+	})
+	// Freeze the version read so pg_locks can show whether it is protected.
+	// The old preflight Version call reaches this read without an advisory lock.
+	if _, err := tx.Exec(t.Context(), "LOCK TABLE schema_migrations IN ACCESS EXCLUSIVE MODE"); err != nil {
+		t.Fatalf("block version reads: %v", err)
+	}
+	parsed, err := url.Parse(databaseURL)
+	if err != nil {
+		t.Fatalf("parse database URL: %v", err)
+	}
+	applicationName := "pcr_lock_test_" + uuid.NewString()
+	query := parsed.Query()
+	query.Set("application_name", applicationName)
+	parsed.RawQuery = query.Encode()
+	result := make(chan error, 1)
+	started = true
+	go func() {
+		defer close(done)
+		result <- postgres.Migrate(parsed.String(), time.Second)
+	}()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var locked bool
+		err := pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_locks l
+				WHERE l.pid = a.pid AND l.locktype = 'advisory' AND l.granted
+			)
+			FROM pg_stat_activity a
+			WHERE a.application_name = $1 AND a.wait_event_type = 'Lock'
+			  AND a.query LIKE 'SELECT version, dirty FROM %'
+		`, applicationName).Scan(&locked)
+		if err == nil {
+			if !locked {
+				t.Fatal("migration reads dirty state without holding its advisory lock")
+			}
+			break
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("observe version read: %v", err)
+		}
+		select {
+		case err := <-result:
+			t.Fatalf("migration returned before reaching the blocked version read: %v", err)
+		case <-ctx.Done():
+			t.Fatal("migration did not reach the blocked version read")
+		case <-ticker.C:
+		}
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("unblock version read: %v", err)
+	}
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("migrate current schema: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("migration did not finish after unblocking version read")
 	}
 }
 
