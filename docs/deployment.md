@@ -2,6 +2,10 @@
 
 Three container deployment methods, in order of simplicity. For direct binary setup during development, see the manual setup in [testing.md](testing.md).
 
+The checked-in files are generic examples. Keep real hosts, identities, network
+selectors, and secrets in a private deployment repository or secret manager;
+see [private configuration](private-configuration.md).
+
 ## Human identity provider
 
 Every installation selects exactly one dashboard provider. GitHub, Google, and direct Authentik modes require an OAuth web application whose callback is the canonical public origin plus `/auth/callback`; Beyond mode uses trusted proxy headers instead.
@@ -59,7 +63,7 @@ applications:
     host: changes.example.com
     allowed_groups: [example-group]
     credential_auth:
-      token_url: http://authentik-server.authentik.svc.cluster.local/application/o/token/
+      token_url: https://auth.example.com/application/o/token/
       client_id: existing-public-m2m-client-id
 ```
 
@@ -84,9 +88,10 @@ The checked-in standalone manifests provide this boundary in
 `k8s/networkpolicy-beyond.yaml`. Apply it whenever
 `PCR_HUMAN_AUTH_PROVIDER=beyond`; do not apply that provider-specific policy to
 a direct GitHub, Google, or Authentik deployment. Its selectors match the
-standalone `app: pcr-server` pods and the company Beyond deployment's
-`app.kubernetes.io/name: beyond` pods. Adapt the PCR selector if the installer
-uses a different chart label. The Deployment uses loopback exec probes so
+standalone `app: pcr-server` pods and example Beyond pods labeled
+`app.kubernetes.io/name: beyond` in namespace `beyond`. Adapt both selectors in
+private deployment configuration to match the actual workloads. The Deployment
+uses loopback exec probes so
 kubelet health checks do not require another NetworkPolicy ingress exception.
 
 Beyond's current identity contract uses verified email rather than OIDC `sub`.
@@ -145,7 +150,7 @@ Interactive users can create a versioned TOML file and enter the credential at
 a hidden prompt:
 
 ```bash
-pcr config init
+pcr --url https://changes.example.com config init
 pcr config set-credential
 pcr config show
 pcr --output=table config path
@@ -157,11 +162,12 @@ files are written atomically with mode `0600` on POSIX systems, and PCR refuses
 to use one readable by group or other users. The target must be an HTTPS
 origin; loopback HTTP requires `--allow-http`.
 
-CI should inject `PCR_CREDENTIAL` from a masked secret and normally set
+CI should inject `PCR_CREDENTIAL` from a masked secret and set
 `PCR_URL`. Never put the composite in a command flag:
 
 ```bash
 test -n "$PCR_CREDENTIAL"
+test -n "$PCR_URL"
 pcr doctor
 pcr events list --limit 1
 pcr events create \
@@ -172,7 +178,7 @@ pcr events create \
 ```
 
 `PCR_CREDENTIAL` overrides the file credential. URL precedence is `--url`,
-`PCR_URL`, file, then `https://pcr.noclues.net`; config-path precedence is
+`PCR_URL`, then file, with no built-in destination; config-path precedence is
 `--config`, `PCR_CONFIG`, then the platform default. The CLI defaults to JSON,
 also supports JSON Lines and tables, refuses redirects, bounds response bodies,
 and does not print credential material. Revoke the user-bound app password when
@@ -333,9 +339,18 @@ docker build -t pcr-server:latest .
 kind load docker-image pcr-server:latest --name pcr
 ```
 
-### Edit secrets
+### Prepare private manifests
 
-Before applying, edit `k8s/secret.yaml` with your actual values:
+Copy the example manifests outside the checkout before filling in real values:
+
+```bash
+install -d -m 0700 "$HOME/.config/pcr/manifests"
+cp -n k8s/*.yaml "$HOME/.config/pcr/manifests/"
+chmod 0600 "$HOME/.config/pcr/manifests/secret.yaml"
+```
+
+For shared environments, use a private deployment repository and your secret
+manager instead. Edit the private copy of `secret.yaml`, not the tracked example:
 
 ```yaml
 stringData:
@@ -346,19 +361,19 @@ stringData:
   oauth-client-secret: "your-provider-client-secret"
 ```
 
-Edit `k8s/configmap.yaml` as well: select `github`, `google`, `authentik`, or `beyond`; set `PCR_PUBLIC_URL` to the HTTPS origin; and set `PCR_ALLOWED_ORGS` to GitHub organizations, Google Workspace domains, or exact Authentik/Beyond groups. Authentik also requires `PCR_OIDC_ISSUER_URL`; Beyond requires the documented proxy-only network path. The checked-in placeholders are not deployment credentials, and the placeholder session secret is too short for the server to accept. Replace all values before applying the manifests. The PostgreSQL host must be reachable from the `pcr` namespace.
+Edit the private copy of `configmap.yaml` as well: select `github`, `google`, `authentik`, or `beyond`; set `PCR_PUBLIC_URL` to the HTTPS origin; and set `PCR_ALLOWED_ORGS` to GitHub organizations, Google Workspace domains, or exact Authentik/Beyond groups. Authentik also requires `PCR_OIDC_ISSUER_URL`; Beyond requires the documented proxy-only network path. The checked-in placeholders are not deployment credentials, and the placeholder session secret is too short for the server to accept. Replace all values before applying the private manifests. The PostgreSQL host must be reachable from the `pcr` namespace.
 
 ### Apply manifests
 
 ```bash
-kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/secret.yaml
-kubectl apply -f k8s/configmap.yaml
-kubectl apply -f k8s/deployment.yaml
-kubectl apply -f k8s/service.yaml
+kubectl apply -f "$HOME/.config/pcr/manifests/namespace.yaml"
+kubectl apply -f "$HOME/.config/pcr/manifests/secret.yaml"
+kubectl apply -f "$HOME/.config/pcr/manifests/configmap.yaml"
+kubectl apply -f "$HOME/.config/pcr/manifests/deployment.yaml"
+kubectl apply -f "$HOME/.config/pcr/manifests/service.yaml"
 
 # Required only when PCR_HUMAN_AUTH_PROVIDER=beyond:
-kubectl apply -f k8s/networkpolicy-beyond.yaml
+kubectl apply -f "$HOME/.config/pcr/manifests/networkpolicy-beyond.yaml"
 ```
 
 Do not expose a Beyond-mode deployment until the NetworkPolicy is applied and

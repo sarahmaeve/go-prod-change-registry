@@ -244,7 +244,7 @@ func TestBeyondIdentityAuthenticatesAPIAndControlsAttribution(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Beyond-Email", "Alice@Example.com")
 	req.Header.Set("X-Beyond-Name", "Alice Example")
-	req.Header.Set("X-Beyond-Groups", "engineering|team-all")
+	req.Header.Set("X-Beyond-Groups", "engineering|example-readers")
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 

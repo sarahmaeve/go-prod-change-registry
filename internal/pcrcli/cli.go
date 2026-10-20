@@ -41,7 +41,7 @@ type BuildInfo struct {
 // CLI is pcr's root Kong model.
 type CLI struct {
 	Config    string        `help:"Configuration file." type:"path" default:"${config_path}"`
-	URL       string        `help:"PCR origin."`
+	URL       string        `help:"PCR origin; required here, in PCR_URL, or in the configuration file."`
 	AllowHTTP bool          `help:"Allow HTTP for loopback development targets only."`
 	Timeout   time.Duration `help:"HTTP request timeout." default:"15s"`
 	Output    string        `help:"Output format." enum:"json,jsonl,table" default:"json"`

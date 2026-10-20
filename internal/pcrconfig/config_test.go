@@ -1,4 +1,4 @@
-package pcrconfig
+package pcrconfig //nolint:testpackage // white-box tests cover unexported path resolution and file installation
 
 import (
 	"errors"
@@ -121,7 +121,7 @@ func TestLoadRefusesUnsafeCredentialModeWithoutLeaking(t *testing.T) {
 	const credential = "person@example.com:top-secret-value"
 	path := filepath.Join(t.TempDir(), "config.toml")
 	contents := "version = 1\nurl = \"https://pcr.example.com\"\ncredential = \"" + credential + "\"\n"
-	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil { //nolint:gosec // G306: the group-readable mode is the fixture under test; Load must refuse it.
 		t.Fatalf("WriteFile(): %v", err)
 	}
 	_, _, err := Load(path, true)
@@ -149,7 +149,9 @@ func TestResolvePrecedence(t *testing.T) {
 		wantCredential   string
 		wantCredentialAt string
 	}{
+		//nolint:gosec // G101: example.com test fixture, not a real credential.
 		{name: "flag and environment", flagURL: "https://flag.example.com", envURL: "https://env.example.com", envCredential: "env@example.com:env-password", wantURL: "https://flag.example.com", wantURLSource: "flag", wantCredential: "env@example.com:env-password", wantCredentialAt: "environment"},
+		//nolint:gosec // G101: example.com test fixture, not a real credential.
 		{name: "environment", envURL: "https://env.example.com", envCredential: "env@example.com:env-password", wantURL: "https://env.example.com", wantURLSource: "environment", wantCredential: "env@example.com:env-password", wantCredentialAt: "environment"},
 		{name: "file", wantURL: "https://file.example.com", wantURLSource: "file", wantCredential: "file@example.com:file-password", wantCredentialAt: "file"},
 	}
@@ -184,12 +186,16 @@ func TestResolvePrecedence(t *testing.T) {
 	}
 
 	missing := filepath.Join(t.TempDir(), "missing.toml")
-	values, err := Resolve(ResolveOptions{Path: missing, Getenv: func(string) string { return "" }})
-	if err != nil {
-		t.Fatalf("Resolve(defaults) error = %v", err)
+	_, err := Resolve(ResolveOptions{Path: missing, Getenv: func(string) string { return "" }})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "PCR URL is required") {
+		t.Fatalf("Resolve(no URL) error = %v, want configuration guidance", err)
 	}
-	if values.URL != DefaultURL || values.URLSource != "default" || values.CredentialSource != "missing" {
-		t.Errorf("Resolve(defaults) = %+v", values)
+	values, err := Resolve(ResolveOptions{Path: missing, URL: "https://explicit.example.com", Getenv: func(string) string { return "" }})
+	if err != nil {
+		t.Fatalf("Resolve(explicit URL) error = %v", err)
+	}
+	if values.URL != "https://explicit.example.com" || values.URLSource != "flag" || values.CredentialSource != "missing" {
+		t.Errorf("Resolve(explicit URL) = %+v", values)
 	}
 }
 

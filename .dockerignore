@@ -5,6 +5,8 @@ bin/
 .git
 .gitignore
 .env
+.env.*
+private/
 .golangci.yml
 *.md
 docs/

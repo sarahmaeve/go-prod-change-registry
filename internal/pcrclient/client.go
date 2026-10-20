@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -307,7 +308,7 @@ func (c *Client) do(ctx context.Context, operation, method string, segments []st
 		return &Error{Kind: ErrorUnavailable, Host: c.origin.Host, Op: operation, Err: err}
 	}
 	defer func() { _ = response.Body.Close() }()
-	if !containsStatus(success, response.StatusCode) {
+	if !slices.Contains(success, response.StatusCode) {
 		var code, message string
 		if response.StatusCode >= http.StatusBadRequest && response.StatusCode < http.StatusInternalServerError {
 			code, message = decodeErrorResponse(response.Body)
@@ -398,15 +399,6 @@ func statusError(operation, host string, status int, code, message string) error
 		kind = ErrorUnavailable
 	}
 	return &Error{Kind: kind, Host: host, Status: status, Op: operation, Code: code, Message: message}
-}
-
-func containsStatus(statuses []int, status int) bool {
-	for _, candidate := range statuses {
-		if candidate == status {
-			return true
-		}
-	}
-	return false
 }
 
 func setTime(query url.Values, name string, value *time.Time) {

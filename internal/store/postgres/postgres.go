@@ -844,6 +844,8 @@ func (s *Store) loadLinksForEvents(ctx context.Context, ids []string) (map[strin
 }
 
 // buildWhereClause constructs the WHERE clause and parameter list for List queries.
+//
+//nolint:gocognit // flat clause-per-filter construction; splitting it would hide the placeholder numbering each clause shares through bind.
 func buildWhereClause(params model.ListParams) (string, []any) {
 	clauses := make([]string, 0)
 	args := make([]any, 0)

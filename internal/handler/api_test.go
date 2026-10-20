@@ -388,7 +388,7 @@ func TestCreateEvent(t *testing.T) {
 		t.Parallel()
 
 		ts := newTestStack()
-		payload := `{"user_name":"alice","event_type":"maintenance","description":"WAF POP2","tags":{"team":"platform"}}`
+		payload := `{"user_name":"alice","event_type":"maintenance","description":"Edge site A","tags":{"team":"platform"}}`
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/events", bytes.NewBufferString(payload))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()

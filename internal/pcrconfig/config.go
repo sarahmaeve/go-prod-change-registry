@@ -17,11 +17,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-const (
-	// DefaultURL is the production PCR origin used when no override is set.
-	DefaultURL  = "https://pcr.noclues.net"
-	maxFileSize = 1 << 20
-)
+const maxFileSize = 1 << 20
 
 // ErrInvalid identifies invalid or unsafe user configuration.
 var ErrInvalid = errors.New("invalid PCR configuration")
@@ -33,8 +29,8 @@ type File struct {
 	Credential string `toml:"credential,omitempty"`
 }
 
-// Values are the effective settings after applying flag, environment, file,
-// and default precedence.
+// Values are the effective settings after applying flag, environment, and file
+// precedence. There is no built-in deployment origin.
 type Values struct {
 	Path             string
 	URL              string
@@ -65,28 +61,9 @@ func DefaultPath() (string, error) {
 // BootstrapPath resolves the config path without parsing any other option.
 // This lets the full parser and configuration loader share the same path.
 func BootstrapPath(args []string, getenv func(string) string) (path string, required bool, err error) {
-	var configuredPath string
-	found := false
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		switch {
-		case arg == "--config":
-			if found {
-				return "", false, fmt.Errorf("%w: --config may be specified only once", ErrInvalid)
-			}
-			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-				return "", false, fmt.Errorf("%w: --config requires a path", ErrInvalid)
-			}
-			i++
-			configuredPath = args[i]
-			found = true
-		case strings.HasPrefix(arg, "--config="):
-			if found {
-				return "", false, fmt.Errorf("%w: --config may be specified only once", ErrInvalid)
-			}
-			configuredPath = strings.TrimPrefix(arg, "--config=")
-			found = true
-		}
+	configuredPath, found, err := configPathFromArgs(args)
+	if err != nil {
+		return "", false, err
 	}
 	if found {
 		if configuredPath == "" {
@@ -111,11 +88,52 @@ func BootstrapPath(args []string, getenv func(string) string) (path string, requ
 	return configuredPath, false, nil
 }
 
+// configPathFromArgs scans argv for --config without consulting the full flag
+// parser, so a malformed later option cannot hide the config path.
+func configPathFromArgs(args []string) (string, bool, error) {
+	var configuredPath string
+	found := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--config":
+			if found {
+				return "", false, fmt.Errorf("%w: --config may be specified only once", ErrInvalid)
+			}
+			value, err := separateFlagValue(args, i)
+			if err != nil {
+				return "", false, err
+			}
+			// Consume the value so the scan does not revisit it as an argument.
+			i++
+			configuredPath = value
+			found = true
+		case strings.HasPrefix(arg, "--config="):
+			if found {
+				return "", false, fmt.Errorf("%w: --config may be specified only once", ErrInvalid)
+			}
+			configuredPath = strings.TrimPrefix(arg, "--config=")
+			found = true
+		}
+	}
+	return configuredPath, found, nil
+}
+
+// separateFlagValue returns the argument following the flag at flagIndex. A
+// value that looks like a flag is rejected rather than consumed, so a missing
+// path cannot silently swallow the next option.
+func separateFlagValue(args []string, flagIndex int) (string, error) {
+	if flagIndex+1 >= len(args) || strings.HasPrefix(args[flagIndex+1], "-") {
+		return "", fmt.Errorf("%w: --config requires a path", ErrInvalid)
+	}
+	return args[flagIndex+1], nil
+}
+
 // Load reads a strict, size-bounded configuration file. A missing default
 // file is equivalent to an empty configuration; a missing explicitly selected
 // file is an error.
 func Load(path string, required bool) (File, bool, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // G304: the config path is operator-selected (--config, PCR_CONFIG, or the user config dir) and screened by BootstrapPath.
 	if errors.Is(err, os.ErrNotExist) && !required {
 		return File{}, false, nil
 	}
@@ -190,9 +208,6 @@ func Resolve(opts ResolveOptions) (Values, error) {
 	case cfg.URL != "":
 		values.URL = cfg.URL
 		values.URLSource = "file"
-	default:
-		values.URL = DefaultURL
-		values.URLSource = "default"
 	}
 	origin, err := ParseOrigin(values.URL, opts.AllowHTTP)
 	if err != nil {
@@ -219,7 +234,10 @@ func Resolve(opts ResolveOptions) (Values, error) {
 
 // ParseOrigin validates and canonicalizes a PCR origin.
 func ParseOrigin(raw string, allowHTTP bool) (*url.URL, error) {
-	if raw == "" || strings.TrimSpace(raw) != raw {
+	if raw == "" {
+		return nil, fmt.Errorf("%w: PCR URL is required; set --url, PCR_URL, or url in the configuration file", ErrInvalid)
+	}
+	if strings.TrimSpace(raw) != raw {
 		return nil, fmt.Errorf("%w: PCR URL must be an HTTPS origin", ErrInvalid)
 	}
 	origin, err := url.Parse(raw)

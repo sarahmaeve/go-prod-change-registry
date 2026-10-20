@@ -9,6 +9,7 @@
 *.dylib
 
 bin/
+dist/
 
 # Stray binaries from `go build ./cmd/<name>` without -o (named after the package dir).
 /smoke
@@ -31,6 +32,12 @@ go.work.sum
 
 # env file
 .env
+.env.*
+!.env.example
+
+# Optional workstation-only configuration; deployment configuration belongs
+# in a separate private repository or secret manager.
+/private/
 
 # Editor/IDE
 # .idea/

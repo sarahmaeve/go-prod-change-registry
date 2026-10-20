@@ -1035,7 +1035,7 @@ func TestDashboardRecordChange(t *testing.T) {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/events", nil)
 		addCSRFFormToRequest(t, req, url.Values{
 			"event_type":  {"maintenance"},
-			"description": {"WAF POP2"},
+			"description": {"Edge site A"},
 			"tags":        {"team=platform"},
 		})
 		rec := httptest.NewRecorder()

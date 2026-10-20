@@ -326,9 +326,6 @@ func (c *ConfigInitCommand) Run(rt *Runtime) error {
 	if target == "" {
 		target = strings.TrimSpace(getenv("PCR_URL"))
 	}
-	if target == "" {
-		target = pcrconfig.DefaultURL
-	}
 	origin, err := pcrconfig.ParseOrigin(target, rt.AllowHTTP)
 	if err != nil {
 		return err

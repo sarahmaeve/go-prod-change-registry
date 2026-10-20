@@ -1,8 +1,9 @@
-package pcrcli
+package pcrcli //nolint:testpackage // white-box tests cover unexported command wiring
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -12,6 +13,8 @@ import (
 	"unicode"
 
 	"github.com/alecthomas/kong"
+
+	"github.com/sarahmaeve/go-prod-change-registry/internal/pcrconfig"
 )
 
 func TestHelpUsesCompleteGroupedCommandTree(t *testing.T) {
@@ -76,7 +79,7 @@ func TestConfigLifecycleNeverPrintsCredential(t *testing.T) {
 		return code, stdout.String(), stderr.String()
 	}
 
-	code, stdout, stderr := run([]string{"config", "init"}, "")
+	code, stdout, stderr := run([]string{"--url", "https://changes.example.com", "config", "init"}, "")
 	if code != exitOK {
 		t.Fatalf("config init = %d, stderr = %q", code, stderr)
 	}
@@ -108,6 +111,57 @@ func TestConfigLifecycleNeverPrintsCredential(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Errorf("config mode = %04o, want 0600", info.Mode().Perm())
+	}
+}
+
+func TestConfigInitRequiresExplicitURL(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	var stdout, stderr strings.Builder
+	code := Run(t.Context(), []string{"--config", path, "config", "init"}, emptyEnvironment, strings.NewReader(""), &stdout, &stderr, BuildInfo{})
+	if code != exitConfig || !strings.Contains(stderr.String(), "PCR URL is required") {
+		t.Fatalf("config init without URL = %d, stderr = %q, want configuration guidance", code, stderr.String())
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Stat(config) error = %v, want no file created", err)
+	}
+
+	getenv := func(key string) string {
+		if key == "PCR_URL" {
+			return "https://changes.example.com"
+		}
+		return ""
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(t.Context(), []string{"--config", path, "config", "init"}, getenv, strings.NewReader(""), &stdout, &stderr, BuildInfo{})
+	if code != exitOK {
+		t.Fatalf("config init with PCR_URL = %d, stderr = %q", code, stderr.String())
+	}
+	cfg, _, err := pcrconfig.Load(path, true)
+	if err != nil || cfg.URL != "https://changes.example.com" {
+		t.Fatalf("Load(config) URL = %q, error = %v, want configured origin", cfg.URL, err)
+	}
+}
+
+func TestMissingURLPreventsHTTPRequests(t *testing.T) {
+	t.Parallel()
+	runtime := &Runtime{
+		Context: t.Context(), ConfigPath: filepath.Join(t.TempDir(), "missing.toml"),
+		Getenv: func(key string) string {
+			if key == "PCR_CREDENTIAL" {
+				return "person@example.com:test-password"
+			}
+			return ""
+		},
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			t.Error("unconfigured client attempted an HTTP request")
+			return nil, errors.New("unexpected HTTP request")
+		})},
+	}
+	command := EventsCreateCommand{ExternalID: "build-1", Type: "deployment", Description: "Deploy service"}
+	if err := command.Run(runtime); !errors.Is(err, pcrconfig.ErrInvalid) || !strings.Contains(err.Error(), "PCR URL is required") {
+		t.Fatalf("create without URL error = %v, want configuration guidance", err)
 	}
 }
 

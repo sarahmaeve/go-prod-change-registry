@@ -1,0 +1,35 @@
+version: 2
+
+builds:
+  - id: pcr
+    main: ./cmd/pcr
+    binary: pcr
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.buildDate={{.Date}}
+
+archives:
+  - id: pcr
+    ids: [pcr]
+    name_template: "pcr_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  draft: false
+  prerelease: auto
+  # Preserve release notes when attaching CLI archives to an existing release.
+  mode: keep-existing

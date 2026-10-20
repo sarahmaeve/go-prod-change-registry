@@ -17,12 +17,19 @@ var (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+// run returns the exit code rather than calling os.Exit itself so that the
+// deferred stop runs: os.Exit skips defers, which would leave the SIGINT and
+// SIGTERM handlers installed and the context unreleased.
+func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	os.Exit(pcrcli.Run(ctx, os.Args[1:], os.Getenv, os.Stdin, os.Stdout, os.Stderr, pcrcli.BuildInfo{
+	return pcrcli.Run(ctx, os.Args[1:], os.Getenv, os.Stdin, os.Stdout, os.Stderr, pcrcli.BuildInfo{
 		Version: version,
 		Commit:  commit,
 		Date:    buildDate,
-	}))
+	})
 }

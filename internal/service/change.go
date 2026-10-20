@@ -53,39 +53,13 @@ func (s *ChangeService) create(ctx context.Context, req *model.CreateChangeReque
 			return existing, store.ErrDuplicate
 		}
 	}
-	if req.UserName == "" {
-		return nil, ErrUserNameRequired
-	}
-	eventType := req.EventType
-	if eventType == "" {
-		return nil, ErrEventTypeRequired
-	}
-	tags := maps.Clone(req.Tags)
-	if tags == nil {
-		tags = make(map[string]string)
-	}
-	if enforceTagPolicy {
-		if strings.EqualFold(strings.TrimSpace(eventType), model.EventTypeMaintenance) {
-			eventType = model.EventTypeMaintenance
-		}
-		tags = normalizeEventTags(tags)
-		if err := validateEventTags(eventType, tags); err != nil {
-			return nil, err
-		}
-	}
-	if err := validateLinks(req.Links); err != nil {
+	eventType, tags, err := validateCreateRequest(req, enforceTagPolicy)
+	if err != nil {
 		return nil, err
 	}
 
-	// If this is a meta-event, verify the parent exists.
-	if req.ParentID != "" {
-		parent, err := s.store.GetByID(ctx, req.ParentID)
-		if err != nil {
-			return nil, err
-		}
-		if parent == nil {
-			return nil, ErrParentNotFound
-		}
+	if err := s.requireParent(ctx, req.ParentID); err != nil {
+		return nil, err
 	}
 
 	now := time.Now().UTC()
@@ -115,6 +89,50 @@ func (s *ChangeService) create(ctx context.Context, req *model.CreateChangeReque
 		return created, store.ErrDuplicate
 	}
 	return created, err
+}
+
+// validateCreateRequest returns the canonical event type and tags for req,
+// applying the new-event tag policy only when the caller enforces it.
+func validateCreateRequest(req *model.CreateChangeRequest, enforceTagPolicy bool) (string, map[string]string, error) {
+	if req.UserName == "" {
+		return "", nil, ErrUserNameRequired
+	}
+	eventType := req.EventType
+	if eventType == "" {
+		return "", nil, ErrEventTypeRequired
+	}
+	tags := maps.Clone(req.Tags)
+	if tags == nil {
+		tags = make(map[string]string)
+	}
+	if enforceTagPolicy {
+		if strings.EqualFold(strings.TrimSpace(eventType), model.EventTypeMaintenance) {
+			eventType = model.EventTypeMaintenance
+		}
+		tags = normalizeEventTags(tags)
+		if err := validateEventTags(eventType, tags); err != nil {
+			return "", nil, err
+		}
+	}
+	if err := validateLinks(req.Links); err != nil {
+		return "", nil, err
+	}
+	return eventType, tags, nil
+}
+
+// requireParent rejects meta-events whose parent does not exist.
+func (s *ChangeService) requireParent(ctx context.Context, parentID string) error {
+	if parentID == "" {
+		return nil
+	}
+	parent, err := s.store.GetByID(ctx, parentID)
+	if err != nil {
+		return err
+	}
+	if parent == nil {
+		return ErrParentNotFound
+	}
+	return nil
 }
 
 type invalidTagsError struct {
@@ -151,6 +169,13 @@ func normalizeEventTags(input map[string]string) map[string]string {
 // validateEventTags protects the well-known tags that feed Current and its
 // dashboard presets. Other tags remain intentionally free-form.
 func validateEventTags(eventType string, tags map[string]string) error {
+	if err := validatePhaseTags(eventType, tags); err != nil {
+		return err
+	}
+	return validateClassificationTags(tags)
+}
+
+func validatePhaseTags(eventType string, tags map[string]string) error {
 	phase, hasPhase := tags["phase"]
 	changeID, hasChangeID := tags["change_id"]
 	deployID, hasDeployID := tags["deploy_id"]
@@ -170,7 +195,10 @@ func validateEventTags(eventType string, tags map[string]string) error {
 	if !hasPhase && hasIdentifierTag {
 		return invalidTags("change_id and deploy_id require phase=start or phase=end")
 	}
+	return nil
+}
 
+func validateClassificationTags(tags map[string]string) error {
 	if severity, ok := tags["severity"]; ok {
 		switch strings.ToLower(severity) {
 		case "sev0", "sev1", "sev2", "sev3":

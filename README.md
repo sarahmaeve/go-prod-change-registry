@@ -73,13 +73,14 @@ pcr current --team payments --severity sev0 --severity sev1
 pcr doctor
 ```
 
-Run `pcr config init` to create the platform-default file, then
+Run `pcr --url https://changes.example.com config init` with your deployment's
+origin to create the platform-default file, then
 `pcr config set-credential` to read the composite from a hidden terminal
 prompt. The file is written atomically with mode `0600` on POSIX systems; PCR
 refuses a credential-bearing file readable by group or other users.
 
 ```bash
-pcr config init
+pcr --url https://changes.example.com config init
 pcr config set-credential
 pcr config show
 pcr --output=table config path  # exact path without JSON framing
@@ -90,7 +91,7 @@ The versioned TOML schema is deliberately small:
 
 ```toml
 version = 1
-url = "https://pcr.noclues.net"
+url = "https://changes.example.com"
 credential = "user@example.com:app-password"
 ```
 
@@ -103,12 +104,17 @@ Effective settings use these precedence rules:
 | Setting | Precedence |
 |---|---|
 | Config path | `--config`, `PCR_CONFIG`, platform default |
-| PCR origin | `--url`, `PCR_URL`, config file, `https://pcr.noclues.net` |
+| PCR origin | `--url`, `PCR_URL`, config file; required, no built-in destination |
 | Credential | `PCR_CREDENTIAL`, config file |
 
 Origins must be HTTPS. Local loopback HTTP additionally requires
 `--allow-http`. Requests have a finite timeout, refuse redirects, bound
 response bodies, and never include credentials in diagnostics.
+
+Keep real origins, access groups, Slack IDs, and secrets in private deployment
+configuration, not in this source tree. See
+[private configuration](docs/private-configuration.md) for configuration storage
+and migration from a previously built-in CLI destination.
 
 For CI, inject the user-bound credential through the build system's masked
 secret mechanism. Environment injection takes precedence over the interactive
@@ -118,6 +124,7 @@ config file and keeps the secret out of process arguments:
 # PCR_CREDENTIAL is a masked secret. A mint purpose label is bookkeeping, not
 # a PCR-only authorization scope; revoke the app password when it is no longer needed.
 test -n "$PCR_CREDENTIAL"
+test -n "$PCR_URL"  # supplied by private deployment configuration
 pcr events create \
   --external-id "${BUILD_SYSTEM}-${BUILD_ID}" \
   --type deployment \

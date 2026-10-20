@@ -295,7 +295,7 @@ func TestCreate(t *testing.T) {
 			return event, nil
 		}}
 		requestTags := map[string]string{
-			"phase": " end ", "deploy_id": " waf-pop2 ", "team": " platform ", "severity": " SEV1 ", "scope": " SITE ",
+			"phase": " end ", "deploy_id": " edge-site-a ", "team": " platform ", "severity": " SEV1 ", "scope": " SITE ",
 		}
 		created, err := service.NewChangeService(ms).Create(context.Background(), &model.CreateChangeRequest{
 			UserName: "alice", EventType: " Maintenance ", Tags: requestTags,
@@ -303,14 +303,14 @@ func TestCreate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Create() error = %v", err)
 		}
-		if captured == nil || captured.Tags["phase"] != "end" || captured.Tags["deploy_id"] != "waf-pop2" ||
+		if captured == nil || captured.Tags["phase"] != "end" || captured.Tags["deploy_id"] != "edge-site-a" ||
 			captured.Tags["team"] != "platform" || captured.Tags["severity"] != "sev1" || captured.Tags["scope"] != "site" {
 			t.Fatalf("stored tags = %v, want normalized well-known tags", captured.Tags)
 		}
 		if created.EventType != model.EventTypeMaintenance {
 			t.Fatalf("stored event type = %q, want maintenance", created.EventType)
 		}
-		if requestTags["deploy_id"] != " waf-pop2 " || requestTags["severity"] != " SEV1 " || requestTags["scope"] != " SITE " {
+		if requestTags["deploy_id"] != " edge-site-a " || requestTags["severity"] != " SEV1 " || requestTags["scope"] != " SITE " {
 			t.Fatalf("Create() mutated request tags: %v", requestTags)
 		}
 	})

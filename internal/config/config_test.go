@@ -142,6 +142,49 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
+	t.Run("google organization domains enforce DNS boundaries", func(t *testing.T) {
+		clearOptionalEnv(t)
+		t.Setenv("PCR_API_TOKENS", "tok1")
+		t.Setenv("PCR_HUMAN_AUTH_PROVIDER", "google")
+		t.Setenv("PCR_HUMAN_AUTH_ALLOW_ANY", "false")
+
+		maxLabel := strings.Repeat("a", 63)
+		maxDomainPrefix := strings.Repeat(maxLabel+".", 3)
+		tests := []struct {
+			name   string
+			domain string
+			valid  bool
+		}{
+			{name: "maximum label", domain: maxLabel + ".com", valid: true},
+			{name: "maximum domain", domain: maxDomainPrefix + strings.Repeat("b", 61), valid: true},
+			{name: "digits and interior hyphens", domain: "team-1.example.com", valid: true},
+			{name: "punycode", domain: "xn--bcher-kva.example", valid: true},
+			{name: "oversized label", domain: maxLabel + "a.com"},
+			{name: "oversized domain", domain: maxDomainPrefix + strings.Repeat("b", 62)},
+			{name: "single label", domain: "localhost"},
+			{name: "empty first label", domain: ".example.com"},
+			{name: "empty middle label", domain: "team..example.com"},
+			{name: "empty last label", domain: "example.com."},
+			{name: "leading hyphen", domain: "-team.example.com"},
+			{name: "trailing hyphen", domain: "team-.example.com"},
+			{name: "underscore", domain: "team_one.example.com"},
+			{name: "unicode label", domain: "bücher.example"},
+		}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				t.Setenv("PCR_ALLOWED_ORGS", test.domain)
+				_, err := config.Load()
+				if test.valid {
+					if err != nil {
+						t.Fatalf("Load() error = %v, want valid Google domain", err)
+					}
+				} else if err == nil || !strings.Contains(err.Error(), "invalid Google Workspace domain") {
+					t.Fatalf("Load() error = %v, want invalid Google domain error", err)
+				}
+			})
+		}
+	})
+
 	t.Run("authentik preserves exact group names and validates issuer", func(t *testing.T) {
 		clearOptionalEnv(t)
 		t.Setenv("PCR_API_TOKENS", "tok1")
@@ -343,7 +386,7 @@ func TestLoad(t *testing.T) {
 		t.Setenv("PCR_HUMAN_AUTH_PROVIDER", "beyond")
 		t.Setenv("PCR_OAUTH_CLIENT_ID", "")
 		t.Setenv("PCR_OAUTH_CLIENT_SECRET", "")
-		t.Setenv("PCR_ALLOWED_ORGS", "team-all")
+		t.Setenv("PCR_ALLOWED_ORGS", "example-readers")
 		t.Setenv("PCR_HUMAN_AUTH_ALLOW_ANY", "false")
 
 		cfg, err := config.Load()
