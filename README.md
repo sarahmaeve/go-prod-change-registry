@@ -31,7 +31,7 @@ The CLI has its own file and environment precedence described below.
 | `PCR_HUMAN_AUTH_ALLOW_ANY` | No | `false` | Explicitly allow any identity verified by the selected provider; mutually exclusive with restrictions |
 | `PCR_HUMAN_SESSION_DURATION` | No | `12h` | Absolute, non-sliding human session and provider-policy freshness window; maximum 7 days |
 | `PCR_ADDR` | No | `:8080` | Listen address (`host:port`) |
-| `PCR_DATABASE_URL` | Yes | -- | PostgreSQL connection URL; require TLS outside local development |
+| `PCR_DATABASE_URL` | Yes | -- | PostgreSQL connection URL; require TLS outside local development. An `*.rds.amazonaws.com` host with no password logs in with RDS IAM tokens (AWS default credential chain) and requires `sslmode=verify-full` |
 | `PCR_REQUIRE_AUTH_READS` | No | `true` | Require auth for read endpoints (GET) |
 | `PCR_AUTO_MIGRATE` | No | `true` | Run database migrations on startup |
 | `PCR_DASHBOARD_REFRESH_SEC` | No | `60` | Dashboard auto-refresh interval in seconds |

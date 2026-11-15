@@ -447,7 +447,7 @@ All methods use the same environment variables. Key settings:
 | `PCR_HUMAN_AUTH_ALLOW_ANY` | No | `false` | Allow any provider identity; mutually exclusive with restrictions |
 | `PCR_HUMAN_SESSION_DURATION` | No | `12h` | Absolute provider-policy freshness and session window |
 | `PCR_SESSION_SECRET` | No | (random 32-byte) | HMAC key for session cookies. Must be at least 32 bytes when set; generate via `openssl rand -base64 48`. Set for persistent sessions across restarts. |
-| `PCR_DATABASE_URL` | Yes | -- | PostgreSQL connection URL; require TLS outside local development |
+| `PCR_DATABASE_URL` | Yes | -- | PostgreSQL connection URL; require TLS outside local development. An `*.rds.amazonaws.com` host with no password logs in with RDS IAM tokens (AWS default credential chain) and requires `sslmode=verify-full` |
 | `PCR_AUTO_MIGRATE` | No | `true` | Run schema migrations on startup |
 | `PCR_ADDR` | No | `:8080` | Listen address |
 | `PCR_REQUIRE_AUTH_READS` | No | `true` | Require auth for read endpoints |

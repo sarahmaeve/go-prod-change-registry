@@ -1,4 +1,6 @@
 // Package postgres owns PostgreSQL connection pools and schema migrations.
+// Both log in with RDS IAM tokens when the DSN names an RDS host and no
+// password (internal/rdsiam).
 package postgres
 
 import (
@@ -15,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 
+	"github.com/sarahmaeve/go-prod-change-registry/internal/rdsiam"
 	"github.com/sarahmaeve/go-prod-change-registry/migrations"
 )
 
@@ -39,6 +42,13 @@ func Open(ctx context.Context, databaseURL string, opts PoolOptions) (*pgxpool.P
 	}
 	poolConfig.MaxConns = int32(opts.MaxConnections)
 	poolConfig.ConnConfig.ConnectTimeout = opts.ConnectTimeout
+	iamLogin, err := rdsiam.Configure(ctx, poolConfig.ConnConfig, nil)
+	if err != nil {
+		return nil, err
+	}
+	if iamLogin != nil {
+		poolConfig.BeforeConnect = iamLogin
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
@@ -64,8 +74,16 @@ func Migrate(databaseURL string, connectTimeout time.Duration) (err error) {
 		return fmt.Errorf("parse PostgreSQL migration configuration: %w", err)
 	}
 	connConfig.ConnectTimeout = connectTimeout
+	var opts []stdlib.OptionOpenDB
+	iamLogin, err := rdsiam.Configure(context.Background(), connConfig, nil)
+	if err != nil {
+		return err
+	}
+	if iamLogin != nil {
+		opts = append(opts, stdlib.OptionBeforeConnect(iamLogin))
+	}
 
-	db := stdlib.OpenDB(*connConfig)
+	db := stdlib.OpenDB(*connConfig, opts...)
 	driver, err := pgxmigrate.WithInstance(db, &pgxmigrate.Config{})
 	if err != nil {
 		_ = db.Close()
