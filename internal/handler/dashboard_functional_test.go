@@ -372,6 +372,8 @@ func TestRecordChangeFormTreatsSQLAsData(t *testing.T) {
 	}
 }
 
+const functionalPublicURL = "https://changes.example.com"
+
 type seededDashboard struct {
 	handler       http.Handler
 	cookie        *http.Cookie
@@ -426,7 +428,8 @@ func seededDashboardRouter(t *testing.T) *seededDashboard {
 	humanAuthHandler := handler.NewHumanAuthHandler(authenticator, handler.HumanAuthOptions{
 		SessionSecret: sessionSecret, SessionDuration: time.Hour,
 	})
-	mux := router.New(apiHandler, dashboardHandler, humanAuthHandler, &config.Config{
+	mcpHandler := handler.NewMCPHandler(svc, functionalPublicURL)
+	mux := router.New(apiHandler, dashboardHandler, humanAuthHandler, mcpHandler, &config.Config{
 		APITokens:         []string{"demo-token"},
 		RequireAuthReads:  false,
 		SessionSecret:     sessionSecret,

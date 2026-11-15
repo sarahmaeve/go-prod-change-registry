@@ -93,7 +93,8 @@ func run(cfg *config.Config) error {
 		humanAuthHandler = handler.NewHumanAuthHandler(authenticator, humanAuthOpts)
 	}
 
-	r := router.New(apiHandler, dashHandler, humanAuthHandler, cfg)
+	mcpHandler := handler.NewMCPHandler(svc, cfg.PublicURL)
+	r := router.New(apiHandler, dashHandler, humanAuthHandler, mcpHandler, cfg)
 	srv := &http.Server{
 		Addr:         cfg.Addr,
 		Handler:      r,

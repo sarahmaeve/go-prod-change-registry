@@ -120,10 +120,16 @@ PCR keeps browser and API authority separate:
 | Direct API | A value from `PCR_API_TOKENS` is accepted as `Authorization: Bearer`, proxy-friendly `Authorization: Token`, or the backwards-compatible `?token=` query parameter. These opaque tokens do not identify a person: create, link, and close bodies supply `user_name`, while bodyless star/alert toggles use the generic actor `api`. |
 | Beyond-fronted API | Beyond validates an Authentik `<email>:<app-password>`, strips it, and supplies trusted identity headers. PCR rechecks policy and ignores a caller-supplied `user_name`. |
 | `pcr` CLI | Uses only the Beyond composite-credential path. It has no legacy-token, credential, header, or user-name flag. |
+| MCP client | `POST /mcp` accepts the same credentials as the Beyond-fronted or direct API paths. Its only tool is read-only. |
 
 With the default `PCR_REQUIRE_AUTH_READS=true`, API reads and writes require one
 of the API paths above. Setting it to `false` makes only API `GET` and `HEAD`
-requests public; writes and every dashboard route remain authenticated. Avoid
+requests public; writes, `/mcp` (all POST), and every dashboard route remain
+authenticated. Behind Beyond, the credential-authenticated path must cover
+`POST /mcp` as well as `/api/v1/*`, pass the request body and the `Accept`,
+`Content-Type`, and `Mcp-*` headers (`Mcp-Protocol-Version`, and
+`Mcp-Method`/`Mcp-Name`, which protocol 2026-07-28 clients must send) through
+unchanged, and return PCR's `application/json` response as is. Avoid
 the query-parameter token for new integrations because URLs are routinely
 logged.
 

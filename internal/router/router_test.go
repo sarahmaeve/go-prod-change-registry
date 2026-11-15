@@ -105,7 +105,10 @@ type mockPinger struct{}
 
 func (p *mockPinger) Ping(_ context.Context) error { return nil }
 
-const testToken = "test-secret-token"
+const (
+	testToken     = "test-secret-token"
+	testPublicURL = "https://changes.example.com"
+)
 
 // newTestRouter creates a full router with auth middleware and mock store.
 func newTestRouter(t *testing.T, requireAuthReads bool) (http.Handler, *mockStore) {
@@ -181,7 +184,9 @@ func newTestRouterWithHumanAuth(t *testing.T, requireAuthReads bool, humanAuthH 
 		HumanAuthProvider: provider,
 	}
 
-	r := router.New(apiH, dashH, humanAuthH, cfg)
+	mcpH := handler.NewMCPHandler(svc, testPublicURL)
+
+	r := router.New(apiH, dashH, humanAuthH, mcpH, cfg)
 	return r, ms
 }
 
