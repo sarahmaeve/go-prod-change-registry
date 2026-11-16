@@ -22,7 +22,7 @@ The CLI has its own file and environment precedence described below.
 |---|---|---|---|
 | `PCR_API_TOKENS` | Except Beyond | -- | Comma-separated legacy API tokens; Beyond deployments may authenticate API clients at the trusted edge instead |
 | `PCR_HUMAN_AUTH_PROVIDER` | Yes | -- | Exactly one dashboard identity provider: `github`, `google`, `authentik`, or trusted proxy `beyond` |
-| `PCR_PUBLIC_URL` | Yes | -- | Canonical external origin used to build `/auth/callback`; HTTPS required except on loopback |
+| `PCR_PUBLIC_URL` | Yes | -- | Canonical external origin used to build `/auth/callback` and MCP event permalinks; HTTPS required except on loopback |
 | `PCR_OAUTH_CLIENT_ID` | Except Beyond | -- | OAuth client ID registered with the selected provider |
 | `PCR_OAUTH_CLIENT_SECRET` | Except Beyond | -- | OAuth client secret registered with the selected provider |
 | `PCR_OIDC_ISSUER_URL` | Authentik only | -- | Recommended per-provider issuer, ending in `/application/o/<slug>/` |
@@ -31,7 +31,7 @@ The CLI has its own file and environment precedence described below.
 | `PCR_HUMAN_AUTH_ALLOW_ANY` | No | `false` | Explicitly allow any identity verified by the selected provider; mutually exclusive with restrictions |
 | `PCR_HUMAN_SESSION_DURATION` | No | `12h` | Absolute, non-sliding human session and provider-policy freshness window; maximum 7 days |
 | `PCR_ADDR` | No | `:8080` | Listen address (`host:port`) |
-| `PCR_DATABASE_URL` | Yes | -- | PostgreSQL connection URL; require TLS outside local development |
+| `PCR_DATABASE_URL` | Yes | -- | PostgreSQL connection URL; require TLS outside local development. An `*.rds.amazonaws.com` host with no password logs in with RDS IAM tokens (AWS default credential chain) and requires `sslmode=verify-full` |
 | `PCR_REQUIRE_AUTH_READS` | No | `true` | Require auth for read endpoints (GET) |
 | `PCR_AUTO_MIGRATE` | No | `true` | Run database migrations on startup |
 | `PCR_DASHBOARD_REFRESH_SEC` | No | `60` | Dashboard auto-refresh interval in seconds |
@@ -172,6 +172,7 @@ The API is append-only. There are no PUT, PATCH, or DELETE endpoints. Events are
 | `POST` | `/api/v1/events/{id}/star` | Toggle star (creates a star or unstar meta-event) |
 | `POST` | `/api/v1/events/{id}/alert` | Toggle alert (creates an alert or clear-alert meta-event) |
 | `POST` | `/api/v1/events/{id}/close` | Close a current operation by appending a correlated end event |
+| `POST` | `/mcp` | Read-only [MCP](#mcp) endpoint serving the `list_deployments` tool |
 
 ### Dashboard routes
 
@@ -351,6 +352,45 @@ pcr-api "http://localhost:8080/api/v1/events?alerted=true&top_level=true"
 ```
 
 This API query has no implicit time bound. The dashboard's Alerts view does have the dashboard's default 24-hour event-time range unless a different range is selected.
+
+## MCP
+
+`POST /mcp` serves a read-only [Model Context Protocol](https://modelcontextprotocol.io) server so agents can read the change timeline as a tool. It uses the streamable HTTP transport in stateless mode: every POST is a complete JSON-RPC exchange answered with `application/json`, there are no sessions, and `GET /mcp` returns 405. The endpoint is always on; its only tool reads what `GET /api/v1/events` already returns.
+
+### Authentication
+
+`/mcp` is an API route and accepts exactly the API credentials described in [Auth](#auth): a Beyond-verified identity (clients send `Authorization: Bearer <email>:<app-password>` to Beyond) or a legacy `PCR_API_TOKENS` value sent as `Bearer` or `Token`. Dashboard session cookies are not accepted. Because every MCP request is a POST, `/mcp` requires a credential even when `PCR_REQUIRE_AUTH_READS=false`. A refused request receives the API's `401` JSON error before any MCP processing. No credential can write through MCP: there is no write tool.
+
+An MCP client configuration entry, with the credential supplied from the environment:
+
+```json
+{
+  "mcpServers": {
+    "pcr": {
+      "type": "http",
+      "url": "https://changes.example.com/mcp",
+      "headers": {"Authorization": "Bearer ${PCR_CREDENTIAL}"}
+    }
+  }
+}
+```
+
+### `list_deployments`
+
+Lists top-level events (no meta-events) in a fixed UTC window, newest first, 25 per page. The tool is annotated `readOnlyHint`, non-destructive, idempotent, and closed-world.
+
+| Argument | Required | Description |
+|---|---|---|
+| `start_after` | Yes | Inclusive RFC 3339 start of the window |
+| `start_before` | Yes | Exclusive RFC 3339 end; the window must be increasing and at most 24 hours |
+| `offset` | Yes | Pagination offset, 0-10000; follow `next_offset` until it is absent |
+| `service` | No | Exact `service` tag |
+| `environment` | No | Exact `env` tag |
+| `cluster` | No | Exact `cluster` tag |
+
+The result is one JSON text block with `events`, `total_count`, `offset`, `next_offset` (only when more events remain), and a `coverage` caveat. Each event carries `id`, `user_name`, `timestamp`, `event_type`, `description`, `long_description`, `tags`, `links`, and a `url` permalink to its dashboard page under `PCR_PUBLIC_URL`. A `description` longer than 1000 bytes is cut to its first 500 characters and a `long_description` longer than 4000 bytes to its first 2000; either cut sets `description_truncated`. Invalid arguments and query failures return a tool error (`isError: true`) whose text explains the problem.
+
+The tool's name, description, schema, and output shape are a stable contract for agents; changing any of them is a breaking change.
 
 ## Meta-Events
 
@@ -598,7 +638,7 @@ internal/
   postgres/        PostgreSQL pool and migration lifecycle
   store/           PostgreSQL data access layer (ChangeStore interface)
   service/         Business logic
-  handler/         HTTP handlers (API + dashboard)
+  handler/         HTTP handlers (API, dashboard, MCP)
   middleware/      Auth, request ID, logging
   pcrcli/          Command model, execution, output, and exit mapping
   pcrclient/       Typed, bounded authenticated HTTP client
@@ -708,7 +748,7 @@ See [docs/testing.md](docs/testing.md) for the smoke-test commands and focused m
 
 ## Auth
 
-The server follows a zero-trust-by-default model. Dashboard routes always require a human session. For API routes, the default `PCR_REQUIRE_AUTH_READS=true` requires authentication for reads and writes; setting it to `false` permits unauthenticated API `GET` and `HEAD` requests while writes still require authentication. Health, login, and static-asset routes are public as listed below.
+The server follows a zero-trust-by-default model. Dashboard routes always require a human session. For API routes, the default `PCR_REQUIRE_AUTH_READS=true` requires authentication for reads and writes; setting it to `false` permits unauthenticated API `GET` and `HEAD` requests while writes still require authentication. The read-only `/mcp` endpoint is an API route whose requests are all POSTs, so it always requires authentication. Health, login, and static-asset routes are public as listed below.
 
 API and human authentication are deliberately separate:
 

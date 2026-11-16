@@ -14,7 +14,7 @@ import (
 )
 
 // New creates and configures a chi.Mux with all application routes and middleware.
-func New(apiHandler *handler.APIHandler, dashHandler *handler.DashboardHandler, humanAuthHandler *handler.HumanAuthHandler, cfg *config.Config) *chi.Mux {
+func New(apiHandler *handler.APIHandler, dashHandler *handler.DashboardHandler, humanAuthHandler *handler.HumanAuthHandler, mcpHandler http.Handler, cfg *config.Config) *chi.Mux {
 	r := chi.NewRouter()
 
 	// Global middleware (applied to all routes including static files).
@@ -58,6 +58,11 @@ func New(apiHandler *handler.APIHandler, dashHandler *handler.DashboardHandler, 
 		r.Post("/api/v1/events/{id}/star", apiHandler.ToggleStar)
 		r.Post("/api/v1/events/{id}/alert", apiHandler.ToggleAlert)
 		r.Post("/api/v1/events/{id}/close", apiHandler.CloseOperation)
+
+		// MCP is a POST-only JSON-RPC endpoint with read-only tools. It sits
+		// behind the same credentials as the REST API; because every call is a
+		// POST, it requires them even when PCR_REQUIRE_AUTH_READS=false.
+		r.Post("/mcp", mcpHandler.ServeHTTP)
 	})
 
 	// Dashboard routes accept only locally validated human sessions.

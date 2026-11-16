@@ -61,6 +61,9 @@ func (c *client) do(ctx context.Context, method, path string, body io.Reader, op
 	if cfg.contentType != "" {
 		req.Header.Set("Content-Type", cfg.contentType)
 	}
+	if cfg.accept != "" {
+		req.Header.Set("Accept", cfg.accept)
+	}
 	switch cfg.auth {
 	case authBearer:
 		if c.token != "" {
@@ -175,6 +178,7 @@ func (a authMode) String() string {
 type reqConfig struct {
 	auth        authMode
 	contentType string
+	accept      string
 }
 
 type reqOpt func(*reqConfig)
@@ -188,5 +192,11 @@ func withAuth(mode authMode) reqOpt {
 func withContentType(ct string) reqOpt {
 	return func(c *reqConfig) {
 		c.contentType = ct
+	}
+}
+
+func withAccept(accept string) reqOpt {
+	return func(c *reqConfig) {
+		c.accept = accept
 	}
 }

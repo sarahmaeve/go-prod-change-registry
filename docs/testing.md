@@ -42,6 +42,14 @@ PCR_TEST_POSTGRES_URL="$PCR_TEST_POSTGRES_URL" go test -race -tags=integration .
 
 This submits SQL-looking values as an authenticated, CSRF-protected browser form through the real router and PostgreSQL store, reads the unchanged values back through the API, and performs a second form write to prove the database remains operational. Client-side validation is intentionally bypassed so the test exercises the authoritative server boundary.
 
+Check the MCP `list_deployments` tool against real PostgreSQL:
+
+```bash
+PCR_TEST_POSTGRES_URL="$PCR_TEST_POSTGRES_URL" go test -race -tags=integration ./internal/handler -run TestMCPListDeploymentsMatchesRESTClientMapping
+```
+
+It seeds paginated, filtered, truncated, and out-of-window events and requires the tool's text to match, byte for byte, what a REST client of `GET /api/v1/events` builds for the same window. The default suite covers the tool contract, argument validation, and `/mcp` authentication; `make smoke` exercises the endpoint over HTTP.
+
 Fuzz the form, configuration, URL, path, and CLI parsing boundaries. Go runs
 one named fuzz target per invocation:
 

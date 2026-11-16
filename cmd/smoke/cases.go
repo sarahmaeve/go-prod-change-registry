@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/sarahmaeve/go-prod-change-registry/internal/model"
 )
@@ -52,6 +55,9 @@ func allCases() []testCase {
 		{"toggle_star_again_unstars", caseToggleStarTwice},
 		{"create_alert_meta_event", caseCreateAlert},
 		{"list_filter_alerted_only", caseListFilterAlerted},
+		{"mcp_rejects_no_auth", caseMCPNoAuth},
+		{"mcp_lists_read_only_tool", caseMCPToolsList},
+		{"mcp_list_deployments", caseMCPListDeployments},
 		{"login_form_renders", caseLoginFormRenders},
 	}
 }
@@ -463,6 +469,115 @@ func caseListFilterAlerted(ctx context.Context, c *client, f *fixture) error {
 		return fmt.Errorf("expected parent event %s in alerted list, not found among %d results", f.parentEventID, lr.TotalCount)
 	}
 	return nil
+}
+
+// --- MCP ---
+
+// mcpPost sends one JSON-RPC request to /mcp and decodes the result on 200.
+func mcpPost(ctx context.Context, c *client, method string, params, result any, opts ...reqOpt) (*response, error) {
+	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+	if err != nil {
+		return nil, fmt.Errorf("encode %s: %w", method, err)
+	}
+	opts = append(opts, withContentType("application/json"), withAccept("application/json, text/event-stream"))
+	r, err := c.do(ctx, http.MethodPost, "/mcp", bytes.NewReader(body), opts...)
+	if err != nil || r.Status != http.StatusOK || result == nil {
+		return r, err
+	}
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+		Error  json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(r.Body, &envelope); err != nil {
+		return r, fmt.Errorf("decode %s: %w (body: %s)", method, err, truncate(r.Body, 200))
+	}
+	if envelope.Error != nil {
+		return r, fmt.Errorf("%s JSON-RPC error: %s", method, envelope.Error)
+	}
+	return r, json.Unmarshal(envelope.Result, result)
+}
+
+func caseMCPNoAuth(ctx context.Context, c *client, _ *fixture) error {
+	r, err := mcpPost(ctx, c, "tools/list", map[string]any{}, nil, withAuth(authNone))
+	if err != nil {
+		return err
+	}
+	return expectStatus(r, http.StatusUnauthorized)
+}
+
+func caseMCPToolsList(ctx context.Context, c *client, _ *fixture) error {
+	var listed struct {
+		Tools []struct {
+			Name        string `json:"name"`
+			Annotations struct {
+				ReadOnlyHint    bool  `json:"readOnlyHint"`
+				DestructiveHint *bool `json:"destructiveHint"`
+			} `json:"annotations"`
+		} `json:"tools"`
+	}
+	r, err := mcpPost(ctx, c, "tools/list", map[string]any{}, &listed)
+	if err != nil {
+		return err
+	}
+	if err := expectStatus(r, http.StatusOK); err != nil {
+		return err
+	}
+	if len(listed.Tools) != 1 || listed.Tools[0].Name != "list_deployments" {
+		return fmt.Errorf("tools = %+v, want only list_deployments", listed.Tools)
+	}
+	if hints := listed.Tools[0].Annotations; !hints.ReadOnlyHint || hints.DestructiveHint == nil || *hints.DestructiveHint {
+		return fmt.Errorf("annotations = %+v, want read-only and non-destructive", hints)
+	}
+	return nil
+}
+
+func caseMCPListDeployments(ctx context.Context, c *client, f *fixture) error {
+	if f.parentEventID == "" {
+		return fmt.Errorf("skipped: parent event was not created")
+	}
+	now := time.Now().UTC()
+	var result struct {
+		IsError bool `json:"isError"`
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	r, err := mcpPost(ctx, c, "tools/call", map[string]any{"name": "list_deployments", "arguments": map[string]any{
+		"start_after":  now.Add(-time.Hour).Format(time.RFC3339),
+		"start_before": now.Add(time.Minute).Format(time.RFC3339),
+		"service":      "api",
+		"environment":  "prod",
+		"offset":       0,
+	}}, &result)
+	if err != nil {
+		return err
+	}
+	if err := expectStatus(r, http.StatusOK); err != nil {
+		return err
+	}
+	if result.IsError || len(result.Content) != 1 {
+		return fmt.Errorf("tools/call result = %+v, want one non-error text block", result)
+	}
+	var page struct {
+		Events []struct {
+			ID  string `json:"id"`
+			URL string `json:"url"`
+		} `json:"events"`
+		TotalCount int    `json:"total_count"`
+		Coverage   string `json:"coverage"`
+	}
+	if err := json.Unmarshal([]byte(result.Content[0].Text), &page); err != nil {
+		return fmt.Errorf("decode list_deployments page: %w", err)
+	}
+	for _, event := range page.Events {
+		if event.ID == f.parentEventID {
+			if !strings.HasSuffix(event.URL, "/events/"+f.parentEventID) {
+				return fmt.Errorf("permalink = %q, want a dashboard event URL", event.URL)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("event %s missing from %d list_deployments results", f.parentEventID, page.TotalCount)
 }
 
 // --- login flow + dashboard + CSRF / size limit ---
